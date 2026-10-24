@@ -23,6 +23,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
+#include "soc/usb_dwc_struct.h"
 #include "errno.h"
 #include "hid_ev.h"
 
@@ -187,10 +188,17 @@ static void usb_lib_task(void *arg)
 {
 	const usb_host_config_t host_config = {
 		.skip_phy_setup = false,
+		.root_port_unpowered = true,
 		.intr_flags = ESP_INTR_FLAG_LEVEL1,
 	};
 
 	ESP_ERROR_CHECK(usb_host_install(&host_config));
+	//ESP32-P4-PC: the USB-A ports sit behind an onboard FE1.1s hub. ESP-IDF does not
+	//support the transaction translator needed for FS/LS devices (keyboards, mice)
+	//behind a HS hub, so force the HS controller to FS/LS-only operation. The hub then
+	//enumerates as a FS hub, behind which LS/FS devices work.
+	USB_DWC_HS.hcfg_reg.fslssupp = 1;
+	ESP_ERROR_CHECK(usb_host_lib_set_root_port_power(true));
 	xTaskNotifyGive(arg);
 
 	while (true) {
