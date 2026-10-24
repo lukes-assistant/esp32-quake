@@ -33,7 +33,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 
 #define QUAKEGENERIC_RES_X 512
-#define QUAKEGENERIC_RES_Y 300
+#define QUAKEGENERIC_RES_Y 288 // 16:9; scales exactly 2.5x to 1280x720 HDMI
 
 #define QUAKEGENERIC_JOY_MAX_AXES 6
 #define QUAKEGENERIC_JOY_AXIS_X 0

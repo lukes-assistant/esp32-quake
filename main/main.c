@@ -18,6 +18,8 @@
 #include <stdint.h>
 #include <string.h>
 #include "bsp/esp-bsp.h"
+#include "driver/gpio.h"
+#include "sd_protocol_defs.h"
 #include "esp_timer.h"
 #include "quakegeneric.h"
 #include "freertos/FreeRTOS.h"
@@ -58,8 +60,38 @@ static void quake_task(void *param) {
 	}
 }
 
+//Olimex ESP32-P4-PC board specifics (pins from the Rev.C schematic)
+#define SD_PWR_EN_GPIO	45	//SD1_PWR_EN, P-MOS high-side switch, active low
+#define HUB_RST_GPIO	21	//HUB_RST# of the FE1.1s USB hub, active low
+
+static void board_init(void) {
+	gpio_config_t io={
+		.pin_bit_mask=(1ULL<<SD_PWR_EN_GPIO)|(1ULL<<HUB_RST_GPIO),
+		.mode=GPIO_MODE_OUTPUT,
+	};
+	gpio_set_level(SD_PWR_EN_GPIO, 0);	//SD card power on
+	gpio_set_level(HUB_RST_GPIO, 0);	//hold USB hub in reset...
+	ESP_ERROR_CHECK(gpio_config(&io));
+	vTaskDelay(pdMS_TO_TICKS(20));
+	gpio_set_level(HUB_RST_GPIO, 1);	//...then release it
+	vTaskDelay(pdMS_TO_TICKS(100));		//let SD power and the hub settle
+}
+
+static void sdcard_mount(void) {
+	//The BSP default is 40MHz; Olimex validated the SD slot on this board at 20MHz
+	sdmmc_host_t host;
+	bsp_sdcard_get_sdmmc_host(SDMMC_HOST_SLOT_0, &host);
+	host.max_freq_khz=SDMMC_FREQ_DEFAULT;
+	bsp_sdcard_cfg_t cfg={
+		.host=&host,
+	};
+	esp_err_t err=bsp_sdcard_sdmmc_mount(&cfg);
+	if (err!=ESP_OK) printf("SD card mount failed: %s\n", esp_err_to_name(err));
+}
+
 void app_main() {
-	bsp_sdcard_mount();
+	board_init();
+	sdcard_mount();
 	display_init();
 
 	ethernet_connect();

@@ -1,4 +1,4 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  espressif/esp32_p4_function_ev_board_noglib: "^4.1.0"
+  # The BSP itself (esp32_p4_function_ev_board) is vendored in components/esp-bsp
   usb_host_hid: "^1.0.1"

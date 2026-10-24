@@ -32,13 +32,20 @@
 
 #include "quakedef.h"
 
+//ESP32-P4-PC: HDMI output via the LT8912B bridge. The BSP's LCD resolution macros
+//describe its MIPI panels, not the HDMI mode, so the output size is defined here.
+//The LT8912B path also requires RGB888 framebuffers.
+#define LCD_H_RES 1280
+#define LCD_V_RES 720
+#define LCD_BPP 3
+
 esp_lcd_panel_handle_t panel_handle = NULL;
 esp_lcd_panel_io_handle_t io_handle = NULL;
 
 
 static uint16_t pal[256];
 static uint8_t *cur_pixels;
-static uint16_t *lcdbuf[2]={};
+static uint8_t *lcdbuf[2]={};
 static int cur_buf=1;
 static int draw_task_quit=0;
 
@@ -88,7 +95,7 @@ static void draw_task(void *param) {
 			}
 		}
 
-		//use ppa to scale image
+		//use ppa to scale image and convert to rgb888
 		ppa_srm_oper_config_t op={
 			.in={
 				.buffer=rgbfb,
@@ -100,20 +107,20 @@ static void draw_task(void *param) {
 			},
 			.out={
 				.buffer=lcdbuf[cur_buf],
-				.buffer_size=BSP_LCD_V_RES*BSP_LCD_H_RES*sizeof(int16_t),
-				.pic_w=BSP_LCD_H_RES,
-				.pic_h=BSP_LCD_V_RES,
-				.srm_cm=PPA_SRM_COLOR_MODE_RGB565,
+				.buffer_size=LCD_V_RES*LCD_H_RES*LCD_BPP,
+				.pic_w=LCD_H_RES,
+				.pic_h=LCD_V_RES,
+				.srm_cm=PPA_SRM_COLOR_MODE_RGB888, //PPA converts from RGB565 while scaling
 			},
-			.scale_x=(float)BSP_LCD_H_RES/(float)QUAKEGENERIC_RES_X,
-			.scale_y=(float)BSP_LCD_V_RES/(float)QUAKEGENERIC_RES_Y,
+			.scale_x=(float)LCD_H_RES/(float)QUAKEGENERIC_RES_X,
+			.scale_y=(float)LCD_V_RES/(float)QUAKEGENERIC_RES_Y,
 			.mode=PPA_TRANS_MODE_BLOCKING,
 		};
 		ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa, &op));
 
 		xSemaphoreGive(drawing_mux);
 		//do a draw to trigger fb flip
-		esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, BSP_LCD_H_RES, BSP_LCD_V_RES, lcdbuf[cur_buf]);
+		esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, lcdbuf[cur_buf]);
 		cur_buf=cur_buf?0:1;
 		int64_t end_us = esp_timer_get_time();
 #if 0
@@ -134,27 +141,35 @@ void QG_SetPalette(unsigned char palette[768]) {
 	}
 }
 
+//write a palette entry (rgb565) to an rgb888 framebuffer pixel
+static void put_pixel(uint8_t *fb, int x, int y, uint16_t c) {
+	uint8_t *p=&fb[(LCD_H_RES*y+x)*LCD_BPP];
+	p[0]=(c<<3)&0xf8;		//b
+	p[1]=(c>>3)&0xfc;		//g
+	p[2]=(c>>8)&0xf8;		//r
+}
+
 #define CHAR_W 8
 #define CHAR_H 16
 
 static void draw_char(int x, int y, int ch, int fore, int back) {
 	//make sure not to draw out of bounds
 	if (x<0 || y<0) return;
-	if (x+CHAR_W >= BSP_LCD_H_RES) return;
-	if (y+CHAR_H >= BSP_LCD_V_RES) return;
+	if (x+CHAR_W >= LCD_H_RES) return;
+	if (y+CHAR_H >= LCD_V_RES) return;
 	//write character
-	uint16_t *fb=lcdbuf[cur_buf];
+	uint8_t *fb=lcdbuf[cur_buf];
 	for (int py=0; py<CHAR_H; py++) {
 		for (int px=0; px<CHAR_W; px++) {
 			int pix=fontdata_8x16[ch*CHAR_H+py]&(1<<px);
 			int col=pix?fore:back;
-			fb[BSP_LCD_H_RES*(y+py)+(x+(7-px))]=pal[col];
+			put_pixel(fb, x+(7-px), y+py, pal[col]);
 		}
 	}
 }
 
 static void draw_end_screen(char *vgamem) {
-	memset(lcdbuf[cur_buf], 0, BSP_LCD_H_RES*BSP_LCD_V_RES*sizeof(uint16_t));
+	memset(lcdbuf[cur_buf], 0, LCD_H_RES*LCD_V_RES*LCD_BPP);
 
 	const unsigned char pal[768]={ //EGA pallette; b, g, r
 		0x00, 0x00, 0x00,
@@ -176,8 +191,8 @@ static void draw_end_screen(char *vgamem) {
 	};
 	QG_SetPalette(pal);
 
-	int off_x=(BSP_LCD_H_RES-(80*8))/2;
-	int off_y=(BSP_LCD_V_RES-(25*16))/2;
+	int off_x=(LCD_H_RES-(80*8))/2;
+	int off_y=(LCD_V_RES-(25*16))/2;
 
 	if (vgamem) {
 		for (int y=0; y<25; y++) {
@@ -187,7 +202,7 @@ static void draw_end_screen(char *vgamem) {
 			}
 		}
 	}
-	esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, BSP_LCD_H_RES, BSP_LCD_V_RES, lcdbuf[cur_buf]);
+	esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, lcdbuf[cur_buf]);
 }
 
 
@@ -208,7 +223,7 @@ void display_quit() {
 void display_init() {
 	//initialize LCD
 	const bsp_display_config_t config = {
-		.hdmi_resolution = BSP_HDMI_RES_NONE,
+		.hdmi_resolution = BSP_HDMI_RES_1280x720,
 		.dsi_bus = {
 			.phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
 			.lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS,
@@ -217,8 +232,7 @@ void display_init() {
 
 	bsp_display_new(&config, &panel_handle, &io_handle);
 	esp_lcd_panel_disp_on_off(panel_handle, true);
-	bsp_display_brightness_init();
-	bsp_display_brightness_set(100);
+	//no backlight on HDMI; the BSP's HDMI backlight pin (GPIO23) is UEXT I2C_SCL2 here
 
 	drawing_mux=xSemaphoreCreateMutex();
 	xTaskCreatePinnedToCore(draw_task, "draw", 4096, NULL, 3, &draw_task_handle, 1);
