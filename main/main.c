@@ -21,6 +21,7 @@
 #include "driver/gpio.h"
 #include "sd_protocol_defs.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "quakegeneric.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -100,10 +101,12 @@ void app_main() {
 
 	input_init();
 
-	int stack_depth=200*1024;
+	//The renderer's big edge/surface/span arrays are static (internal SRAM), so the
+	//stack is small and can live in internal SRAM too.
+	int stack_depth=32*1024;
 
 	StaticTask_t *taskbuf=calloc(1, sizeof(StaticTask_t));
-	uint8_t *stackbuf=calloc(stack_depth, 1);
+	uint8_t *stackbuf=heap_caps_calloc(stack_depth, 1, MALLOC_CAP_INTERNAL);
 	xTaskCreateStaticPinnedToCore(quake_task, "quake", stack_depth, NULL, 2, (StackType_t*)stackbuf, taskbuf, 0);
 }
 

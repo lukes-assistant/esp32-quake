@@ -443,7 +443,7 @@ void R_LeadingEdge (edge_t *edge)
 	espan_t			*span;
 	surf_t			*surf, *surf2;
 	int				iu;
-	double			fu, newzi, testzi, newzitop, newzibottom;
+	float			fu, newzi, testzi, newzitop, newzibottom;
 
 	if (edge->surfs[1])
 	{
@@ -641,7 +641,7 @@ Each surface has a linked list of its visible spans
 void R_ScanEdges (void)
 {
 	int		iv, bottom;
-	byte	basespans[MAXSPANS*sizeof(espan_t)+CACHE_SIZE];
+	static byte	basespans[MAXSPANS*sizeof(espan_t)+CACHE_SIZE];	// internal SRAM, not stack
 	espan_t	*basespan_p;
 	surf_t	*s;
 

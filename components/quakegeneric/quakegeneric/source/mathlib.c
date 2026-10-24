@@ -481,11 +481,11 @@ quotient must fit in 32 bits.
 ====================
 */
 
-void FloorDivMod (double numer, double denom, int *quotient,
+void FloorDivMod (float numer, float denom, int *quotient,
 		int *rem)
 {
 	int		q, r;
-	double	x;
+	float	x;
 
 #ifndef PARANOID
 	if (denom <= 0.0)
@@ -499,18 +499,18 @@ void FloorDivMod (double numer, double denom, int *quotient,
 	if (numer >= 0.0)
 	{
 
-		x = floor(numer / denom);
+		x = floorf(numer / denom);
 		q = (int)x;
-		r = (int)floor(numer - (x * denom));
+		r = (int)floorf(numer - (x * denom));
 	}
 	else
 	{
 	//
 	// perform operations with positive values, and fix mod to make floor-based
 	//
-		x = floor(-numer / denom);
+		x = floorf(-numer / denom);
 		q = -(int)x;
-		r = (int)floor(-numer - (x * denom));
+		r = (int)floorf(-numer - (x * denom));
 		if (r != 0)
 		{
 			q--;

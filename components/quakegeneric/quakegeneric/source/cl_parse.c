@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "quakedef.h"
+#include "esp_attr.h"
 
 char *svc_strings[] =
 {
@@ -206,8 +207,8 @@ void CL_ParseServerInfo (void)
 	char	*str;
 	int		i;
 	int		nummodels, numsounds;
-	char	model_precache[MAX_MODELS][MAX_QPATH];
-	char	sound_precache[MAX_SOUNDS][MAX_QPATH];
+	static EXT_RAM_BSS_ATTR char	model_precache[MAX_MODELS][MAX_QPATH];
+	static EXT_RAM_BSS_ATTR char	sound_precache[MAX_SOUNDS][MAX_QPATH];
 	
 	Con_DPrintf ("Serverinfo packet received.\n");
 //

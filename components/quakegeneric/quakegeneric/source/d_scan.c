@@ -385,7 +385,7 @@ void D_DrawZSpans (espan_t *pspan)
 	int				izi;
 	short			*pdest;
 	unsigned		ltemp;
-	double			zi;
+	float			zi;	// was double: soft-float on the P4 (single-precision FPU only)
 	float			du, dv;
 
 // FIXME: check for clamping/range problems

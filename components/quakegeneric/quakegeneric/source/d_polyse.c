@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // texture (used for Alias models)
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "r_local.h"
 #include "d_local.h"
 
@@ -122,7 +123,7 @@ D_PolysetDraw
 */
 void D_PolysetDraw (void)
 {
-	spanpackage_t	spans[DPS_MAXSPANS + 1 +
+	static EXT_RAM_BSS_ATTR spanpackage_t	spans[DPS_MAXSPANS + 1 +
 			((CACHE_SIZE - 1) / sizeof(spanpackage_t)) + 1];
 						// one extra because of cache line pretouching
 
@@ -479,7 +480,7 @@ D_PolysetSetUpForLineScan
 void D_PolysetSetUpForLineScan(fixed8_t startvertu, fixed8_t startvertv,
 		fixed8_t endvertu, fixed8_t endvertv)
 {
-	double		dm, dn;
+	float		dm, dn;
 	int			tm, tn;
 	adivtab_t	*ptemp;
 
@@ -500,8 +501,8 @@ void D_PolysetSetUpForLineScan(fixed8_t startvertu, fixed8_t startvertv,
 	}
 	else
 	{
-		dm = (double)tm;
-		dn = (double)tn;
+		dm = (float)tm;
+		dn = (float)tn;
 
 		FloorDivMod (dm, dn, &ubasestep, &erroradjustup);
 
@@ -534,9 +535,9 @@ void D_PolysetCalcGradients (int skinwidth)
 	t0 = r_p0[4] - r_p2[4];
 	t1 = r_p1[4] - r_p2[4];
 	r_lstepx = (int)
-			ceil((t1 * p01_minus_p21 - t0 * p11_minus_p21) * xstepdenominv);
+			ceilf((t1 * p01_minus_p21 - t0 * p11_minus_p21) * xstepdenominv);
 	r_lstepy = (int)
-			ceil((t1 * p00_minus_p20 - t0 * p10_minus_p20) * ystepdenominv);
+			ceilf((t1 * p00_minus_p20 - t0 * p10_minus_p20) * ystepdenominv);
 
 	t0 = r_p0[2] - r_p2[2];
 	t1 = r_p1[2] - r_p2[2];

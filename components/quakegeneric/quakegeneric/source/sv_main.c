@@ -709,7 +709,7 @@ SV_SendClientDatagram
 */
 qboolean SV_SendClientDatagram (client_t *client)
 {
-	byte		buf[MAX_DATAGRAM];
+	static EXT_RAM_BSS_ATTR byte		buf[MAX_DATAGRAM];
 	sizebuf_t	msg;
 	
 	msg.data = buf;

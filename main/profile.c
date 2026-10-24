@@ -94,6 +94,8 @@ void profile_init() {
 #endif
 }
 
+extern int r_peak_edges, r_peak_surfs;
+
 static void window_start(void) {
 	taskENTER_CRITICAL(&stats_mux);
 	disp_convert_us=0;
@@ -125,6 +127,13 @@ static void window_end(const char *what, int frames, float seconds) {
 		printf("BENCH game (core 0) waited for display: %.2f ms per frame\n",
 				drawframe_wait_us/1000.0/wait_frames);
 	}
+	TaskHandle_t quake_task=xTaskGetHandle("quake");
+	printf("BENCH peak edges %d, peak surfaces %d, quake stack unused %lu bytes\n",
+			r_peak_edges, r_peak_surfs,
+			quake_task?(unsigned long)uxTaskGetStackHighWaterMark(quake_task):0);
+	printf("BENCH internal RAM free %u bytes, largest block %u bytes\n",
+			heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+			heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 #if CONFIG_QUAKE_PROFILE
 	dump_samples();
 #endif

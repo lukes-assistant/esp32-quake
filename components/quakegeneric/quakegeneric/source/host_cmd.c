@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "esp_attr.h"
 
 extern cvar_t	pausable;
 
@@ -523,7 +524,8 @@ void Host_Loadgame_f (void)
 	FILE	*f;
 	char	mapname[MAX_QPATH];
 	float	time, tfloat;
-	char	str[32768], *start;
+	static EXT_RAM_BSS_ATTR char	str[32768];
+	char	*start;
 	int		i, r;
 	edict_t	*ent;
 	int		entnum;

@@ -61,11 +61,13 @@ extern	vec3_t	vpn, base_vpn;
 extern	vec3_t	vright, base_vright;
 extern	entity_t		*currententity;
 
-#define NUMSTACKEDGES		2400
+// ESP32-P4: sized to fit internal SRAM (static, see R_EdgeDrawing); demo peaks were
+// 833 edges and 346 surfaces. Larger values via r_maxedges/r_maxsurfs go to the hunk.
+#define NUMSTACKEDGES		1200
 #define	MINEDGES			NUMSTACKEDGES
-#define NUMSTACKSURFACES	800
+#define NUMSTACKSURFACES	448
 #define MINSURFACES			NUMSTACKSURFACES
-#define	MAXSPANS			3000
+#define	MAXSPANS			1200	// only sets how often R_ScanEdges flushes spans
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!
 typedef struct espan_s

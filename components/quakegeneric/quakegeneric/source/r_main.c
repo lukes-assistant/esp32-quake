@@ -652,7 +652,7 @@ int R_BmodelCheckBBox (model_t *clmodel, float *minmaxs)
 {
 	int			i, *pindex, clipflags;
 	vec3_t		acceptpt, rejectpt;
-	double		d;
+	float		d;
 
 	clipflags = 0;
 
@@ -844,11 +844,15 @@ void R_DrawBEntitiesOnList (void)
 R_EdgeDrawing
 ================
 */
+// peak per-frame usage of the edge and surface arrays, for sizing them
+int r_peak_edges, r_peak_surfs;
+
 void R_EdgeDrawing (void)
 {
-	edge_t	ledges[NUMSTACKEDGES +
+	// static rather than on the stack, so they live in internal SRAM
+	static edge_t	ledges[NUMSTACKEDGES +
 				((CACHE_SIZE - 1) / sizeof(edge_t)) + 1];
-	surf_t	lsurfs[NUMSTACKSURFACES +
+	static surf_t	lsurfs[NUMSTACKSURFACES +
 				((CACHE_SIZE - 1) / sizeof(surf_t)) + 1];
 
 	if (auxedges)
@@ -883,6 +887,11 @@ void R_EdgeDrawing (void)
 
 	if (r_drawculledpolys)
 		R_ScanEdges ();
+
+	if (edge_p - r_edges > r_peak_edges)
+		r_peak_edges = edge_p - r_edges;
+	if (surface_p - surfaces > r_peak_surfs)
+		r_peak_surfs = surface_p - surfaces;
 
 // only the world can be drawn back to front with no z reads or compares, just
 // z writes, so have the driver turn z compares on now
