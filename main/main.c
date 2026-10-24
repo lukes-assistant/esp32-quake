@@ -30,6 +30,7 @@
 #include "font_8x16.h"
 #include "input.h"
 #include "display.h"
+#include "profile.h"
 
 #include "quakedef.h"
 
@@ -91,6 +92,7 @@ static void sdcard_mount(void) {
 
 void app_main() {
 	board_init();
+	profile_init();
 	sdcard_mount();
 	display_init();
 

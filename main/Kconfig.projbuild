@@ -1,0 +1,35 @@
+menu "Quake"
+
+    config QUAKE_BENCHMARK_SECONDS
+        int "Benchmark the first N seconds of the attract-mode demo (0 = off)"
+        default 10
+        range 0 120
+        help
+            After boot the game plays demo1 in the background of the menu. Its first
+            N seconds (from its second frame) are measured: average fps and a timing
+            breakdown of the display pipeline are printed on the console. This needs
+            no input and does not change what the game does. A timedemo produces the
+            same report when it finishes.
+
+    config QUAKE_PROFILE
+        bool "Sample the game core's program counter while benchmarking"
+        default n
+        help
+            During a benchmark window or timedemo, a timer interrupt on core 1 reads
+            core 0's current program counter from the ASSIST_DEBUG PC-recording
+            register. Nothing runs on core 0, so the game is not slowed down. At the
+            end of the window, the sampled PCs are printed as "PROF <pc> <count>"
+            lines; tools/profile_report.py maps them to functions.
+
+    config QUAKE_PROFILE_SAMPLE_HZ
+        int "Sample rate (Hz)"
+        depends on QUAKE_PROFILE
+        default 2000
+        range 100 20000
+
+    config QUAKE_PROFILE_MAX_SAMPLES
+        int "Maximum number of samples (4 bytes each, in PSRAM)"
+        depends on QUAKE_PROFILE
+        default 262144
+
+endmenu

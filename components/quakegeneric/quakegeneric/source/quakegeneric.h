@@ -56,5 +56,8 @@ void QG_SetPalette(unsigned char palette[768]);
 int QG_GetKey(int *down, int *key);
 void QG_GetMouseMove(int *x, int *y);
 void QG_GetJoyAxes(float *axes);
+//called when a timedemo starts timing (second demo frame) and when it finishes
+void QG_TimeDemoStart(void);
+void QG_TimeDemoEnd(int frames, float seconds);
 
 #endif // __QUAKEGENERIC__

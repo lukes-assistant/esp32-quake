@@ -702,6 +702,7 @@ void CL_Init (void)
 // register our commands
 //
 	Cvar_RegisterVariable (&cl_name);
+	Cvar_RegisterVariable (&timedemo_frames);
 	Cvar_RegisterVariable (&cl_color);
 	Cvar_RegisterVariable (&cl_upspeed);
 	Cvar_RegisterVariable (&cl_forwardspeed);

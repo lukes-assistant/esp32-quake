@@ -29,6 +29,7 @@
 #include "freertos/semphr.h"
 #include "font_8x16.h"
 #include "driver/ppa.h"
+#include "profile.h"
 
 #include "quakedef.h"
 
@@ -56,7 +57,10 @@ static int fps_ticks=0;
 static int64_t start_time_fps_meas;
 
 void QG_DrawFrame(void *pixels) {
+	int64_t wait_start_us=esp_timer_get_time();
 	xSemaphoreTake(drawing_mux, portMAX_DELAY);
+	profile_drawframe_wait(esp_timer_get_time()-wait_start_us);
+	profile_frame();
 	cur_pixels=pixels;
 	xSemaphoreGive(drawing_mux);
 	xTaskNotifyGive(draw_task_handle);
@@ -95,6 +99,8 @@ static void draw_task(void *param) {
 			}
 		}
 
+		int64_t convert_end_us = esp_timer_get_time();
+
 		//use ppa to scale image and convert to rgb888
 		ppa_srm_oper_config_t op={
 			.in={
@@ -117,6 +123,7 @@ static void draw_task(void *param) {
 			.mode=PPA_TRANS_MODE_BLOCKING,
 		};
 		ESP_ERROR_CHECK(ppa_do_scale_rotate_mirror(ppa, &op));
+		profile_display_times(convert_end_us-start_us, esp_timer_get_time()-convert_end_us);
 
 		xSemaphoreGive(drawing_mux);
 		//do a draw to trigger fb flip

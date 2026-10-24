@@ -162,6 +162,35 @@ of Quake should be able to connect to it. Simply select the ``New game`` option 
 ``multiplayer`` menu. Note that clients also should connect to the game using the 
 ``Join game at`` method.
 
+Benchmarking and profiling
+==========================
+
+After boot, the game plays demo1 behind the menu. The first 10 seconds of it (from its second
+frame, so level loading is excluded) are measured automatically, and a summary is printed on
+the serial console:
+
+    BENCH attract demo: 220 frames 10.02 seconds 21.96 fps
+    BENCH display (core 1) per frame: palette convert 7.91 ms, PPA scale 22.84 ms
+    BENCH game (core 0) waited for display: 0.16 ms per frame
+
+This doesn't change what the game does and needs no input, so it is a convenient, repeatable
+baseline: consecutive runs agree to within about 0.3%. The window length is set in
+`idf.py menuconfig` under Quake → `QUAKE_BENCHMARK_SECONDS` (0 turns it off).
+
+A `timedemo` prints the same summary. To keep timedemos short, cap the number of timed frames
+with the `timedemo_frames` console variable, e.g. `timedemo_frames 300; timedemo demo1`.
+
+To see where the game core's time goes, enable `QUAKE_PROFILE` in menuconfig. During the
+benchmark window (or a timedemo), a timer interrupt on core 1 samples core 0's program counter
+2000 times a second from the ESP32-P4's ASSIST_DEBUG PC-recording register. Nothing extra runs
+on core 0, and measured fps is unchanged with sampling on. At the end of the window the samples
+are printed as `PROF` lines. Save the serial output and run:
+
+    idf.py monitor | tee profile.log      # wait for PROF_END, then exit with Ctrl+]
+    tools/profile_report.py profile.log build/quake.elf --top 30
+
+This prints the share of samples per function; `--lines` also lists the hottest source lines.
+
 Differences from the EV-Board version
 =====================================
 

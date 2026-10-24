@@ -1,0 +1,186 @@
+// Low-overhead benchmarking and profiling.
+//
+// A measurement window is either the first CONFIG_QUAKE_BENCHMARK_SECONDS of the
+// attract-mode demo after boot, or a timedemo. During a window we count frames,
+// accumulate the display pipeline timings reported by display.c and, with
+// CONFIG_QUAKE_PROFILE, sample the game core's program counter. The PC is read
+// from the ASSIST_DEBUG PC-recording register by a timer interrupt on core 1, so
+// nothing extra runs on core 0, where the game runs.
+
+#include <stdio.h>
+#include <stdlib.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "driver/gptimer.h"
+#include "soc/assist_debug_reg.h"
+#include "sdkconfig.h"
+#include "profile.h"
+
+#include "quakedef.h"
+
+static portMUX_TYPE stats_mux=portMUX_INITIALIZER_UNLOCKED;
+static volatile int active=0;
+static int64_t win_start_us;
+static int win_frames;
+static int64_t disp_convert_us, disp_scale_us, drawframe_wait_us;
+static int disp_frames, wait_frames;
+
+#if CONFIG_QUAKE_PROFILE
+static uint32_t *samples;
+static volatile uint32_t nsamples;
+static gptimer_handle_t sample_timer;
+
+static bool IRAM_ATTR sample_isr(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *arg) {
+	if (active && nsamples<CONFIG_QUAKE_PROFILE_MAX_SAMPLES) {
+		samples[nsamples++]=REG_READ(ASSIST_DEBUG_CORE_0_RCD_PDEBUGPC_REG);
+	}
+	return false;
+}
+
+//the timer interrupt is allocated on the core that registers the callback
+static void sample_timer_setup_task(void *arg) {
+	const gptimer_config_t cfg={
+		.clk_src=GPTIMER_CLK_SRC_DEFAULT,
+		.direction=GPTIMER_COUNT_UP,
+		.resolution_hz=1000000,
+	};
+	ESP_ERROR_CHECK(gptimer_new_timer(&cfg, &sample_timer));
+	const gptimer_alarm_config_t alarm={
+		.alarm_count=1000000/CONFIG_QUAKE_PROFILE_SAMPLE_HZ,
+		.reload_count=0,
+		.flags.auto_reload_on_alarm=true,
+	};
+	ESP_ERROR_CHECK(gptimer_set_alarm_action(sample_timer, &alarm));
+	const gptimer_event_callbacks_t cbs={
+		.on_alarm=sample_isr,
+	};
+	ESP_ERROR_CHECK(gptimer_register_event_callbacks(sample_timer, &cbs, NULL));
+	ESP_ERROR_CHECK(gptimer_enable(sample_timer));
+	xTaskNotifyGive((TaskHandle_t)arg);
+	vTaskDelete(NULL);
+}
+
+static int cmp_u32(const void *a, const void *b) {
+	uint32_t x=*(const uint32_t*)a, y=*(const uint32_t*)b;
+	return (x>y)-(x<y);
+}
+
+static void dump_samples(void) {
+	qsort(samples, nsamples, sizeof(uint32_t), cmp_u32);
+	printf("PROF_BEGIN %lu %d\n", (unsigned long)nsamples, CONFIG_QUAKE_PROFILE_SAMPLE_HZ);
+	for (uint32_t i=0; i<nsamples; ) {
+		uint32_t j=i;
+		while (j<nsamples && samples[j]==samples[i]) j++;
+		printf("PROF %08lx %lu\n", (unsigned long)samples[i], (unsigned long)(j-i));
+		i=j;
+	}
+	printf("PROF_END\n");
+	if (nsamples>=CONFIG_QUAKE_PROFILE_MAX_SAMPLES) {
+		printf("PROF: sample buffer full, later samples were dropped\n");
+	}
+}
+#endif
+
+void profile_init() {
+#if CONFIG_QUAKE_PROFILE
+	samples=heap_caps_malloc(CONFIG_QUAKE_PROFILE_MAX_SAMPLES*sizeof(uint32_t), MALLOC_CAP_SPIRAM);
+	assert(samples);
+	//make sure core 0's PC is being recorded (ESP-IDF normally enables this at startup)
+	REG_WRITE(ASSIST_DEBUG_CORE_0_RCD_EN_REG, ASSIST_DEBUG_CORE_0_RCD_PDEBUGEN|ASSIST_DEBUG_CORE_0_RCD_RECORDEN);
+	xTaskCreatePinnedToCore(sample_timer_setup_task, "proftimer", 4096, xTaskGetCurrentTaskHandle(), 5, NULL, 1);
+	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#endif
+}
+
+static void window_start(void) {
+	taskENTER_CRITICAL(&stats_mux);
+	disp_convert_us=0;
+	disp_scale_us=0;
+	drawframe_wait_us=0;
+	disp_frames=0;
+	wait_frames=0;
+	taskEXIT_CRITICAL(&stats_mux);
+	win_frames=0;
+	win_start_us=esp_timer_get_time();
+#if CONFIG_QUAKE_PROFILE
+	nsamples=0;
+	ESP_ERROR_CHECK(gptimer_start(sample_timer));
+#endif
+	active=1;
+}
+
+static void window_end(const char *what, int frames, float seconds) {
+	active=0;
+#if CONFIG_QUAKE_PROFILE
+	ESP_ERROR_CHECK(gptimer_stop(sample_timer));
+#endif
+	printf("BENCH %s: %d frames %.2f seconds %.2f fps\n", what, frames, seconds, frames/seconds);
+	if (disp_frames) {
+		printf("BENCH display (core 1) per frame: palette convert %.2f ms, PPA scale %.2f ms\n",
+				disp_convert_us/1000.0/disp_frames, disp_scale_us/1000.0/disp_frames);
+	}
+	if (wait_frames) {
+		printf("BENCH game (core 0) waited for display: %.2f ms per frame\n",
+				drawframe_wait_us/1000.0/wait_frames);
+	}
+#if CONFIG_QUAKE_PROFILE
+	dump_samples();
+#endif
+}
+
+//automatic benchmark of the attract-mode demo; armed once at boot
+static int bench_state=(CONFIG_QUAKE_BENCHMARK_SECONDS>0)?1:0;
+
+void profile_frame() {
+	if (bench_state==0 || cls.timedemo) {
+		if (active) win_frames++;
+		return;
+	}
+	//only count frames while a demo is actually playing
+	if (!cls.demoplayback || cls.signon!=SIGNONS) return;
+	if (bench_state==1) {
+		//skip the first demo frame, which includes level loading
+		bench_state=2;
+		return;
+	}
+	if (bench_state==2) {
+		window_start();
+		bench_state=3;
+		return;
+	}
+	win_frames++;
+	float seconds=(esp_timer_get_time()-win_start_us)/1000000.0;
+	if (seconds>=CONFIG_QUAKE_BENCHMARK_SECONDS) {
+		window_end("attract demo", win_frames, seconds);
+		bench_state=0;
+	}
+}
+
+void QG_TimeDemoStart(void) {
+	if (active) return; //attract-demo window still running
+	window_start();
+}
+
+void QG_TimeDemoEnd(int frames, float seconds) {
+	if (!active) return;
+	window_end("timedemo", frames, seconds);
+}
+
+void profile_display_times(int64_t convert_us, int64_t scale_us) {
+	if (!active) return;
+	taskENTER_CRITICAL(&stats_mux);
+	disp_convert_us+=convert_us;
+	disp_scale_us+=scale_us;
+	disp_frames++;
+	taskEXIT_CRITICAL(&stats_mux);
+}
+
+void profile_drawframe_wait(int64_t wait_us) {
+	if (!active) return;
+	taskENTER_CRITICAL(&stats_mux);
+	drawframe_wait_us+=wait_us;
+	wait_frames++;
+	taskEXIT_CRITICAL(&stats_mux);
+}

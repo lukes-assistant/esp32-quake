@@ -22,6 +22,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 void CL_FinishTimeDemo (void);
 
+// if nonzero, end a timedemo after this many timed frames (for quicker benchmarks)
+cvar_t	timedemo_frames = {"timedemo_frames", "0"};
+
 /*
 ==============================================================================
 
@@ -105,7 +108,16 @@ int CL_GetMessage (void)
 			// if this is the second frame, grab the real td_starttime
 			// so the bogus time on the first frame doesn't count
 				if (host_framecount == cls.td_startframe + 1)
+				{
 					cls.td_starttime = realtime;
+					QG_TimeDemoStart ();
+				}
+				if (timedemo_frames.value > 0
+				&& host_framecount - cls.td_startframe - 1 >= timedemo_frames.value)
+				{
+					CL_StopPlayback ();
+					return 0;
+				}
 			}
 			else if ( /* cl.time > 0 && */ cl.time <= cl.mtime[0])
 			{
@@ -335,6 +347,7 @@ void CL_FinishTimeDemo (void)
 	if (!time)
 		time = 1;
 	Con_Printf ("%i frames %5.1f seconds %5.1f fps\n", frames, time, frames/time);
+	QG_TimeDemoEnd (frames, time);
 }
 
 /*
