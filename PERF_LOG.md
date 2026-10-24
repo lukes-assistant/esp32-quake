@@ -217,3 +217,66 @@ doubles -> float). Re-measured **25.64 fps** (from 21.96 baseline: +17%).
   gain, for ~50-70 KB of internal RAM that USB also needs. Parked on branch
   `banding-experiment` (commit below); main branch reverted to non-banded.
 
+## 2026-10-24 — Step 3: display pipeline
+
+### Experiment: RGB565 HDMI frame buffers, DSI bridge converts to RGB888
+- The LT8912B needs RGB888 over DSI, so the BSP forced RGB888 frame buffers (2.76 MB each,
+  166 MB/s of continuous scan-out from PSRAM, and 2.76 MB/frame of PPA writes). ESP-IDF's DPI
+  panel has separate in_color_format (frame buffer) and out_color_format (DSI). Patched the
+  vendored BSP's HDMI path to use RGB565 frame buffers with out_color_format RGB888 (removed
+  its `#error`), set CONFIG_BSP_LCD_COLOR_FORMAT_RGB565, and made display.c follow the
+  configured format (PPA outputs RGB565, no colour conversion).
+- **35.73 fps (+39% vs 25.62)**. PPA 22.2 -> 11.1 ms/frame, palette convert 8.5 -> 6.2 ms;
+  game waits 0.02 ms/frame for the display. PSRAM bandwidth was the shared bottleneck.
+- Picture correctness (colours, stability) not yet confirmed on the monitor.
+
+- **Correction: invalid result.** The user reported the HDMI screen was solid blue (audio
+  still working). On chips before rev v3.0 the DSI bridge cannot convert RGB565 to RGB888:
+  in hal/esp32p4/include/hal/mipi_dsi_brg_ll.h (the `CHIP_SUPPORT_MIN_REV < 300` branch),
+  set_output_color_format writes the same `raw_type` field as set_input_color_format, so the
+  bridge read the RGB565 buffers as RGB888. The 35.73 fps is therefore not valid (scan-out
+  was not the intended stream). Reverted (RGB888 frame buffers again).
+- Checked alternative: YUV422 frame buffers (16 bpp; on rev < 3 the bridge's YUV input uses
+  a separate field, `data_in_type`, so YUV422 -> RGB888 conversion would work). But the PPA
+  can't produce YUV422 on this chip: hal/esp32p4/include/hal/ppa_ll.h says "YUV422 not
+  supported by PPA SRM hardware before P4 ECO5". Not pursued.
+
+### Experiment: HDMI 1280x720 at 30 Hz (DPI pixel clock 80 -> 40 MHz, same timing)
+- New BSP option CONFIG_BSP_LCD_HDMI_HALF_REFRESH halved dpi_clock_freq_mhz (LT8912B follows
+  the incoming MIPI timing; its pclk_mhz is only used for its test pattern). 29.99 Hz,
+  22.2 kHz line rate (CEA 720p30 is 22.5 kHz).
+- **30.66 fps (+19% vs 25.74)**, PPA 22.2 -> 15.5 ms, convert 8.5 -> 7.2 ms. Confirms that
+  HDMI scan-out bandwidth (166 MB/s at RGB888 60 Hz) is a major cost for the game core.
+- But the user's monitor showed a **blank screen** (doesn't accept this timing). Reverted.
+
+### Experiment: HDMI 720x400@70 (VGA text mode timing), DPI clock from the APLL
+- Added a 720x400 mode to the vendored LT8912B/BSP: 28.322 MHz (APLL; the I2S audio clock is
+  XTAL on rev < 3 chips, so the APLL is free), 900x449 total, -H +V sync. Quake rendered
+  480x320 (scales 1.5x / 1.25x), vid.aspect set for a 4:3 display.
+- APLL locked at 28322012 Hz; LT8912B reported HDMI output enabled. **35.19 fps** (PPA 8.4 ms,
+  convert 6.5 ms) — but the user's monitor reported **no video input**. Unclear whether the
+  monitor rejects 720x400 or the APLL-clocked DPI path is at fault.
+- User decision: target **640x480@60** from now on and optimise for that. 720x400 removed.
+
+## 2026-10-25 — New target: 640x480@60, Quake rendered at 640x480 (no scaling)
+
+User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 natively.
+
+### Setup
+- Vendored LT8912B/BSP: new 640x480 mode. Pixel clock 160/6 = 26.667 MHz from PLL_F160M
+  (exact integer divider, no APLL); totals widened to 848x524 so the line rate (31.45 kHz)
+  and frame rate (60.01 Hz) match VGA; -H -V sync, VIC 1, 4:3. LT8912B detected V total
+  0x20c = 524 (with the 720x400 attempt it still reported 741, the 720p total — that mode's
+  DPI timing apparently never reached the bridge).
+- display.c: when Quake renders at the display resolution, core 1 converts the 8-bit frame
+  straight into the RGB888 frame buffer (4 pixels -> 3 aligned 32-bit stores via a 32-bit
+  palette); no RGB565 intermediate and no PPA. The PPA path remains for scaled modes.
+- quakegeneric.h: 640x480 render size for this mode; vid_null.c sets vid.aspect from the
+  displayed shape (1.0 here and for 512x288 at 16:9).
+
+### Baseline for the new target
+- **18.50 fps** at 640x480 (185 frames / 10 s). Core 1 convert 15.6 ms/frame; game never
+  waits for the display. Peak edges 598, surfaces 230.
+- Pixel throughput 5.7 Mpx/s vs 3.8 Mpx/s at 512x288 -> 720p (+50% per pixel), thanks to
+  ~55 MB/s scan-out instead of ~166 MB/s and no PPA traffic.
+

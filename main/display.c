@@ -36,15 +36,27 @@
 //ESP32-P4-PC: HDMI output via the LT8912B bridge. The BSP's LCD resolution macros
 //describe its MIPI panels, not the HDMI mode, so the output size is defined here.
 //The LT8912B path also requires RGB888 framebuffers.
+#if CONFIG_BSP_LCD_HDMI_640x480_60HZ
+#define LCD_H_RES 640
+#define LCD_V_RES 480
+#define LCD_HDMI_RES BSP_HDMI_RES_640x480
+#else
 #define LCD_H_RES 1280
 #define LCD_V_RES 720
+#define LCD_HDMI_RES BSP_HDMI_RES_1280x720
+#endif
 #define LCD_BPP 3
+
+//When Quake renders at the display resolution, the palette conversion writes RGB888 straight
+//into the frame buffer; otherwise it writes RGB565 that the PPA scales and converts.
+#define DIRECT_CONVERT (QUAKEGENERIC_RES_X==LCD_H_RES && QUAKEGENERIC_RES_Y==LCD_V_RES)
 
 esp_lcd_panel_handle_t panel_handle = NULL;
 esp_lcd_panel_io_handle_t io_handle = NULL;
 
 
 static uint16_t pal[256];
+static uint32_t pal888[256];	//0x00RRGGBB: little-endian B,G,R bytes as in the frame buffer
 static uint8_t *cur_pixels;
 static uint8_t *lcdbuf[2]={};
 static int cur_buf=1;
@@ -75,6 +87,31 @@ void QG_DrawFrame(void *pixels) {
 }
 
 static void draw_task(void *param) {
+	ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 2, (void**)&lcdbuf[0], (void**)&lcdbuf[1]));
+#if DIRECT_CONVERT
+	while(!draw_task_quit) {
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+		xSemaphoreTake(drawing_mux, portMAX_DELAY);
+		int64_t start_us = esp_timer_get_time();
+		//convert 4 pixels at a time into 3 aligned 32-bit words of RGB888
+		const uint8_t *p=(const uint8_t*)cur_pixels;
+		uint32_t *out=(uint32_t*)lcdbuf[cur_buf];
+		for (int i=0; i<LCD_H_RES*LCD_V_RES; i+=4) {
+			uint32_t p0=pal888[p[0]], p1=pal888[p[1]], p2=pal888[p[2]], p3=pal888[p[3]];
+			out[0]=p0|(p1<<24);
+			out[1]=(p1>>8)|(p2<<16);
+			out[2]=(p2>>16)|(p3<<8);
+			p+=4;
+			out+=3;
+		}
+		xSemaphoreGive(drawing_mux);
+		profile_display_times(esp_timer_get_time()-start_us, 0);
+		//do a draw to trigger cache write-back and the fb flip
+		esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, lcdbuf[cur_buf]);
+		cur_buf=cur_buf?0:1;
+	}
+#else
 	ppa_client_config_t ppa_cfg={
 		.oper_type=PPA_OPERATION_SRM,
 	};
@@ -83,7 +120,6 @@ static void draw_task(void *param) {
 
 	uint16_t *rgbfb=heap_caps_calloc(QUAKEGENERIC_RES_X*QUAKEGENERIC_RES_Y, sizeof(uint16_t), MALLOC_CAP_DMA|MALLOC_CAP_SPIRAM);
 	assert(rgbfb);
-	ESP_ERROR_CHECK(esp_lcd_dpi_panel_get_frame_buffer(panel_handle, 2, (void**)&lcdbuf[0], (void**)&lcdbuf[1]));
 
 	while(!draw_task_quit) {
 		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -135,6 +171,7 @@ static void draw_task(void *param) {
 		printf("LCD Fps: %02f\n", 1000000.0/(end_us-start_us));
 #endif
 	}
+#endif
 }
 
 void QG_SetPalette(unsigned char palette[768]) {
@@ -145,6 +182,7 @@ void QG_SetPalette(unsigned char palette[768]) {
 		int g=(*p++)>>2;
 		int r=(*p++)>>3;
 		pal[i]=r+(g<<5)+(b<<11);
+		pal888[i]=(palette[i*3]<<16)|(palette[i*3+1]<<8)|palette[i*3+2];
 	}
 }
 
@@ -230,7 +268,7 @@ void display_quit() {
 void display_init() {
 	//initialize LCD
 	const bsp_display_config_t config = {
-		.hdmi_resolution = BSP_HDMI_RES_1280x720,
+		.hdmi_resolution = LCD_HDMI_RES,
 		.dsi_bus = {
 			.phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
 			.lane_bit_rate_mbps = BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS,

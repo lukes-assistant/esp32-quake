@@ -705,7 +705,8 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
         LT8912B_1024x768_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
         LT8912B_1280x720_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
         LT8912B_1280x800_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
-        LT8912B_1920x1080_PANEL_30HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS)
+        LT8912B_1920x1080_PANEL_30HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS),
+        LT8912B_640x480_PANEL_60HZ_DPI_CONFIG_WITH_FBS(CONFIG_BSP_LCD_DPI_BUFFER_NUMS)
     };
 
 #if CONFIG_BSP_LCD_USE_DMA2D && (ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(6, 0, 0))
@@ -719,7 +720,8 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
         ESP_LCD_LT8912B_VIDEO_TIMING_1024x768_60Hz(),
         ESP_LCD_LT8912B_VIDEO_TIMING_1280x720_60Hz(),
         ESP_LCD_LT8912B_VIDEO_TIMING_1280x800_60Hz(),
-        ESP_LCD_LT8912B_VIDEO_TIMING_1920x1080_30Hz()
+        ESP_LCD_LT8912B_VIDEO_TIMING_1920x1080_30Hz(),
+        ESP_LCD_LT8912B_VIDEO_TIMING_640x480_60Hz()
     };
     lt8912b_vendor_config_t vendor_config = {
         .mipi_config = {
@@ -749,6 +751,11 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
         ESP_LOGI(TAG, "HDMI configuration for 1280x800@60HZ");
         vendor_config.mipi_config.dpi_config = &dpi_configs[3];
         memcpy(&vendor_config.video_timing, &video_timings[3], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
+        break;
+    case BSP_HDMI_RES_640x480:
+        ESP_LOGI(TAG, "HDMI configuration for 640x480@60HZ");
+        vendor_config.mipi_config.dpi_config = &dpi_configs[5];
+        memcpy(&vendor_config.video_timing, &video_timings[5], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
         break;
     case BSP_HDMI_RES_1920x1080:
         ESP_LOGI(TAG, "HDMI configuration for 1920x1080@30HZ");
@@ -914,6 +921,10 @@ static lv_display_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
         display_hres = 1920;
         display_vres = 1080;
         break;
+    case BSP_HDMI_RES_640x480:
+        display_hres = 640;
+        display_vres = 480;
+        break;
     default:
         ESP_LOGE(TAG, "Unsupported HDMI resolution");
     }
@@ -1008,6 +1019,8 @@ lv_display_t *bsp_display_start(void)
             .hdmi_resolution = BSP_HDMI_RES_800x600,
 #elif CONFIG_BSP_LCD_HDMI_1024x768_60HZ
             .hdmi_resolution = BSP_HDMI_RES_1024x768,
+#elif CONFIG_BSP_LCD_HDMI_640x480_60HZ
+            .hdmi_resolution = BSP_HDMI_RES_640x480,
 #elif CONFIG_BSP_LCD_HDMI_1280x720_60HZ
             .hdmi_resolution = BSP_HDMI_RES_1280x720,
 #elif CONFIG_BSP_LCD_HDMI_1280x800_60HZ

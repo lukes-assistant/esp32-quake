@@ -32,8 +32,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#define QUAKEGENERIC_RES_Y (200)
 
 
+#include "sdkconfig.h"
+#if CONFIG_BSP_LCD_HDMI_640x480_60HZ
+// 640x480 HDMI: rendered at the display resolution, no scaling
+#define QUAKEGENERIC_RES_X 640
+#define QUAKEGENERIC_RES_Y 480
+#define QUAKEGENERIC_DISPLAY_ASPECT (4.0/3.0)
+#else
 #define QUAKEGENERIC_RES_X 512
 #define QUAKEGENERIC_RES_Y 288 // 16:9; scales exactly 2.5x to 1280x720 HDMI
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
+#endif
 
 #define QUAKEGENERIC_JOY_MAX_AXES 6
 #define QUAKEGENERIC_JOY_AXIS_X 0

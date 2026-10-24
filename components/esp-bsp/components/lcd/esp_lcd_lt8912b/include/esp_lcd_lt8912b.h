@@ -109,6 +109,20 @@ bool esp_lcd_panel_lt8912b_is_ready(esp_lcd_panel_t *panel);
 #define LT8912B_800X600_HBP       88
 #define LT8912B_800X600_HTOTAL    (800 + LT8912B_800X600_HFP + LT8912B_800X600_HSW + LT8912B_800X600_HBP)
 
+/*
+ * 640x480@60: VGA, with the pixel clock an exact division of PLL_F160M (160/6 = 26.667 MHz
+ * instead of 25.175 MHz). The totals are widened to 848x524 so the line rate (31.45 kHz)
+ * and frame rate (60.01 Hz) match VGA. -hsync -vsync, as VGA.
+ */
+#define LT8912B_640X480_HFP       16
+#define LT8912B_640X480_HSW       96
+#define LT8912B_640X480_HBP       96
+#define LT8912B_640X480_HTOTAL    (640 + LT8912B_640X480_HFP + LT8912B_640X480_HSW + LT8912B_640X480_HBP)
+#define LT8912B_640X480_VFP       10
+#define LT8912B_640X480_VSW       2
+#define LT8912B_640X480_VBP       32
+#define LT8912B_640X480_VTOTAL    (480 + LT8912B_640X480_VFP + LT8912B_640X480_VSW + LT8912B_640X480_VBP)
+
 #define LT8912B_1280X720_HFP      408
 #define LT8912B_1280X720_HSW      32
 #define LT8912B_1280X720_HBP      80
@@ -184,6 +198,48 @@ bool esp_lcd_panel_lt8912b_is_ready(esp_lcd_panel_t *panel);
             .vsync_back_porch = 23,                        \
             .vsync_pulse_width = 4,                        \
             .vsync_front_porch = 1,                        \
+        },                                                 \
+        .flags.disable_lp = true,                          \
+    }
+
+/**
+ * @brief Video timing configuration structure (640x480 60Hz)
+ */
+#define ESP_LCD_LT8912B_VIDEO_TIMING_640x480_60Hz() \
+    {                               \
+        .hfp            = LT8912B_640X480_HFP,       \
+        .hs             = LT8912B_640X480_HSW,       \
+        .hbp            = LT8912B_640X480_HBP,       \
+        .hact           = 640,      \
+        .htotal         = LT8912B_640X480_HTOTAL,    \
+        .vfp            = LT8912B_640X480_VFP,       \
+        .vs             = LT8912B_640X480_VSW,       \
+        .vbp            = LT8912B_640X480_VBP,       \
+        .vact           = 480,      \
+        .vtotal         = LT8912B_640X480_VTOTAL,    \
+        .h_polarity     = 0,        \
+        .v_polarity     = 0,        \
+        .vic            = 1,        \
+        .aspect_ratio   = LT8912B_ASPECT_RATION_4_3, \
+        .pclk_mhz       = 27,       \
+    }
+
+#define LT8912B_640x480_PANEL_60HZ_DPI_CONFIG_WITH_FBS(NUM_FBS) \
+    {                           \
+        .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_PLL_F160M,     \
+        .dpi_clock_freq_mhz = 160.0 / 6,                   \
+        .virtual_channel = 0,                              \
+        .in_color_format = LCD_COLOR_PIXEL_FORMAT_RGB888,     \
+        .num_fbs = NUM_FBS,                                      \
+        .video_timing = {                                  \
+            .h_size = 640,                       \
+            .v_size = 480,                       \
+            .hsync_back_porch = LT8912B_640X480_HBP,       \
+            .hsync_pulse_width = LT8912B_640X480_HSW,      \
+            .hsync_front_porch = LT8912B_640X480_HFP,      \
+            .vsync_back_porch = LT8912B_640X480_VBP,       \
+            .vsync_pulse_width = LT8912B_640X480_VSW,      \
+            .vsync_front_porch = LT8912B_640X480_VFP,      \
         },                                                 \
         .flags.disable_lp = true,                          \
     }

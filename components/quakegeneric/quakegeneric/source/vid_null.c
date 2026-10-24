@@ -53,7 +53,8 @@ void	VID_Init (unsigned char *palette)
 	vid_buffer[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
 	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
 	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
-	vid.aspect = 1.0;
+	// pixel aspect for the shape the image is displayed at (1.0 = square pixels)
+	vid.aspect = ((float)BASEHEIGHT / (float)BASEWIDTH) * QUAKEGENERIC_DISPLAY_ASPECT;
 	vid.numpages = 2;
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));

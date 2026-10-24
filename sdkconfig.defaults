@@ -28,12 +28,13 @@ CONFIG_USB_HOST_HUB_MULTI_LEVEL=y
 CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 
-# ESP32-P4-PC display: HDMI via the onboard LT8912B DSI-to-HDMI bridge, which
-# needs RGB888. 1280x720 is the mode Olimex validated on this board.
+# ESP32-P4-PC display: HDMI via the onboard LT8912B DSI-to-HDMI bridge, which needs RGB888.
+# 640x480@60: Quake renders at the display resolution (no PPA scaling), and HDMI scan-out
+# takes ~55 MB/s of PSRAM bandwidth instead of ~166 MB/s at 1280x720 (see PERF_LOG.md).
 CONFIG_BSP_I2C_NUM=1
 CONFIG_BSP_I2C_FAST_MODE=y
 CONFIG_BSP_LCD_TYPE_HDMI=y
-CONFIG_BSP_LCD_HDMI_1280x720_60HZ=y
+CONFIG_BSP_LCD_HDMI_640x480_60HZ=y
 CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y
 
 # ESP32-P4 chip revision v1.0 on this board; IDF v5.5 defaults to rev >= v3.0

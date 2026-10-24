@@ -158,6 +158,8 @@ menu "Board Support Package (ESP32-P4)"
                 Select the HDMI output timing. The 1280x720 mode uses the
                 exact 80 MHz timing from esp_lcd_lt8912b 0.2.1.
 
+            config BSP_LCD_HDMI_640x480_60HZ
+                bool "640x480@60Hz"
             config BSP_LCD_HDMI_800x600_60HZ
                 bool "800x600@60Hz"
             config BSP_LCD_HDMI_1024x768_60HZ
