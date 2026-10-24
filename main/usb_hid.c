@@ -120,8 +120,29 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
 	}
 }
 
+//Mouse motion is accumulated here rather than queued: a gaming mouse reports up to
+//1000 times a second, far faster than the game drains the queue once per frame.
+static portMUX_TYPE mouse_mux=portMUX_INITIALIZER_UNLOCKED;
+static int mouse_dx=0, mouse_dy=0;
+
 static void hidev_cb(hid_ev_t *event) {
+	if (event->type==HIDEV_EVENT_MOUSE_MOTION) {
+		taskENTER_CRITICAL(&mouse_mux);
+		mouse_dx+=event->mouse_motion.dx;
+		mouse_dy+=event->mouse_motion.dy;
+		taskEXIT_CRITICAL(&mouse_mux);
+		return;
+	}
 	xQueueSend(hidev_event_queue, event, pdMS_TO_TICKS(1000));
+}
+
+void usb_hid_get_mouse_motion(int *dx, int *dy) {
+	taskENTER_CRITICAL(&mouse_mux);
+	*dx=mouse_dx;
+	*dy=mouse_dy;
+	mouse_dx=0;
+	mouse_dy=0;
+	taskEXIT_CRITICAL(&mouse_mux);
 }
 
 

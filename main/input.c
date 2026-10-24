@@ -110,33 +110,30 @@ const uint16_t key_conv_tab[]={
 	[KEY_EQUAL]='=',
 };
 
-static int mouse_dx=0, mouse_dy=0;
-
 int QG_GetKey(int *down, int *key) {
 	*key=0;
 	*down=0;
 	hid_ev_t ev;
-	int ret=usb_hid_receive_hid_event(&ev);
-	if (!ret) return 0;
-	if (ev.type==HIDEV_EVENT_KEY_DOWN || ev.type==HIDEV_EVENT_KEY_UP) {
-		*down=(ev.type==HIDEV_EVENT_KEY_DOWN)?1:0;
-		if (ev.key.keycode < sizeof(key_conv_tab)/sizeof(key_conv_tab[0])) {
-			*key=key_conv_tab[ev.key.keycode];
-		}
-		return 1;
-	} else if (ev.type==HIDEV_EVENT_MOUSE_BUTTONDOWN || ev.type==HIDEV_EVENT_MOUSE_BUTTONUP) {
-		*key=K_MOUSE1+ev.no;
-		*down=(ev.type==HIDEV_EVENT_MOUSE_BUTTONDOWN)?1:0;
-		return 1;
-	} else if (ev.type==HIDEV_EVENT_MOUSE_MOTION) {
-		mouse_dx+=ev.mouse_motion.dx;
-		mouse_dy+=ev.mouse_motion.dy;
-	} else if (ev.type==HIDEV_EVENT_MOUSE_WHEEL) {
-		int d=ev.mouse_wheel.d;
-		if (d!=0) {
-			*key=(d<0)?K_MWHEELUP:K_MWHEELDOWN;
-			*down=1;
+	//Quake stops polling when this returns 0, so skip events that don't produce a key
+	//rather than returning 0 for them, or they back up the queue.
+	while (usb_hid_receive_hid_event(&ev)) {
+		if (ev.type==HIDEV_EVENT_KEY_DOWN || ev.type==HIDEV_EVENT_KEY_UP) {
+			*down=(ev.type==HIDEV_EVENT_KEY_DOWN)?1:0;
+			if (ev.key.keycode < sizeof(key_conv_tab)/sizeof(key_conv_tab[0])) {
+				*key=key_conv_tab[ev.key.keycode];
+			}
 			return 1;
+		} else if (ev.type==HIDEV_EVENT_MOUSE_BUTTONDOWN || ev.type==HIDEV_EVENT_MOUSE_BUTTONUP) {
+			*key=K_MOUSE1+ev.no;
+			*down=(ev.type==HIDEV_EVENT_MOUSE_BUTTONDOWN)?1:0;
+			return 1;
+		} else if (ev.type==HIDEV_EVENT_MOUSE_WHEEL) {
+			int d=ev.mouse_wheel.d;
+			if (d!=0) {
+				*key=(d<0)?K_MWHEELUP:K_MWHEELDOWN;
+				*down=1;
+				return 1;
+			}
 		}
 	}
 	return 0;
@@ -146,10 +143,7 @@ void QG_GetJoyAxes(float *axes) {
 }
 
 void QG_GetMouseMove(int *x, int *y) {
-	*x=mouse_dx;
-	*y=mouse_dy;
-	mouse_dx=0;
-	mouse_dy=0;
+	usb_hid_get_mouse_motion(x, y);
 }
 
 
