@@ -201,6 +201,17 @@ void D_DrawSurfaces (void)
 	}
 	else
 	{
+	// queue the z-buffer fill for the other core, then draw the pixels here
+		for (s = &surfaces[1] ; s<surface_p ; s++)
+		{
+			if (!s->spans)
+				continue;
+			s->zqueued = (s->flags & SURF_DRAWBACKGROUND) ?
+					D_ZJobAdd (s->spans, -0.9, 0, 0) :
+					D_ZJobAdd (s->spans, s->d_ziorigin, s->d_zistepu, s->d_zistepv);
+		}
+		D_ZJobsStart ();
+
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
 			if (!s->spans)
@@ -220,7 +231,8 @@ void D_DrawSurfaces (void)
 				}
 
 				D_DrawSkyScans8 (s->spans);
-				D_DrawZSpans (s->spans);
+				if (!s->zqueued)
+					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWBACKGROUND)
 			{
@@ -231,7 +243,8 @@ void D_DrawSurfaces (void)
 				d_ziorigin = -0.9;
 
 				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				D_DrawZSpans (s->spans);
+				if (!s->zqueued)
+					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWTURB)
 			{
@@ -258,7 +271,8 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 				Turbulent8 (s->spans);
-				D_DrawZSpans (s->spans);
+				if (!s->zqueued)
+					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
 				{
@@ -306,7 +320,8 @@ void D_DrawSurfaces (void)
 
 				(*d_drawspans) (s->spans);
 
-				D_DrawZSpans (s->spans);
+				if (!s->zqueued)
+					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
 				{
@@ -326,6 +341,7 @@ void D_DrawSurfaces (void)
 				}
 			}
 		}
+		D_ZJobsWait ();
 	}
 }
 

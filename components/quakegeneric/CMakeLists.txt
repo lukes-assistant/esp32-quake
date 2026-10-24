@@ -26,6 +26,7 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/d_surf.c
 	${QUAKE_SOURCE_DIR}/source/d_vars.c
 	${QUAKE_SOURCE_DIR}/source/d_zpoint.c
+	${QUAKE_SOURCE_DIR}/source/d_zjob.c
 	${QUAKE_SOURCE_DIR}/source/draw.c
 	${QUAKE_SOURCE_DIR}/source/host_cmd.c
 	${QUAKE_SOURCE_DIR}/source/host.c

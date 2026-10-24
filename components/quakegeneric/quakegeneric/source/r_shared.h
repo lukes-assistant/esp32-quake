@@ -96,7 +96,8 @@ typedef struct surf_s
 	qboolean	insubmodel;
 	float		d_ziorigin, d_zistepu, d_zistepv;
 
-	int			pad[2];				// to 64 bytes
+	qboolean	zqueued;			// z fill queued for the other core (d_zjob.c)
+	int			pad[1];				// to 64 bytes
 } surf_t;
 
 extern	surf_t	*surfaces, *surface_p, *surf_max;

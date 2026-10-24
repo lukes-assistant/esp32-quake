@@ -280,3 +280,38 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 - Pixel throughput 5.7 Mpx/s vs 3.8 Mpx/s at 512x288 -> 720p (+50% per pixel), thanks to
   ~55 MB/s scan-out instead of ~166 MB/s and no PPA traffic.
 
+### Profile at 640x480 (18.63 fps)
+- D_DrawSpans8 37.7%, R_DrawSurfaceBlock8_mip0 14.4%, D_DrawZSpans 12.2%,
+  D_PolysetDrawSpans8 5.3%, R_GenerateSpans 1.9%, R_DrawSurfaceBlock8_mip1 1.8%,
+  R_RecursiveWorldNode 1.6%, S_PaintChannels 1.5%. Pixel fill ~70% of core 0's time.
+- Core 1 (palette convert) busy 15.8 of ~53.7 ms per frame. 60 fps needs ~3.2x.
+- (A CRC-based render-correctness check was started but dropped at the user's request:
+  too heavy.)
+
+### Diagnostics at 640x480 (measurement-only builds, reverted right after)
+- World z writes disabled (D_DrawZSpans returns at once; models lose occlusion, the gun
+  vanished): **22.13 fps** vs 18.63 -> z-buffer writes cost ~8.5 ms/frame (~16%).
+- World span pixels written to an SRAM scratch row instead of the framebuffer:
+  **20.02 fps** -> framebuffer writes cost ~3.8 ms/frame (~7%).
+- So an all-SRAM tiled renderer could save at most ~23% of core 0's time; the rest of
+  D_DrawSpans8 (~30% of the frame) is texel fetch and arithmetic.
+
+### Experiment: 4 MB surface cache (-surfcachesize 4096; default ~1.33 MB at 640x480)
+- **18.64 fps (no change)**. The cache isn't thrashing; surfaces are rebuilt because their
+  lighting animates (lightstyles/dynamic lights). Reverted.
+
+### Experiment: colormap copy in internal SRAM, at 640x480
+- **18.70 fps (+0.3%, noise)**. Reverted.
+
+### Experiment: world z-buffer fill on core 1 (d_zjob.c)
+- At the start of each D_DrawSurfaces flush, core 0 queues one job per surface (span list +
+  the surface's 1/z gradients, from surf_t; background uses 0,0,-0.9) and wakes a worker task
+  on core 1 (priority 6: above the display conversion, below audio). Core 0 draws the
+  pixels, then waits for the worker before the span lists are reused, so models always
+  depth-test against a complete z-buffer. The job copy of D_DrawZSpans takes the gradients
+  as parameters (same arithmetic, same z values). Queue of 1024 jobs; overflow falls back to
+  the inline z pass. Handshake: worker notifies exactly once per start; only core 0 tracks
+  "started" (avoids a stale notification making a later wait return early).
+- **20.45 fps (+9.8% vs 18.63)**. Core 1 convert 17.4 ms (was 15.6; it now shares the core).
+  Internal RAM free 120 -> 100 KB (16 KB job queue + 4 KB task stack). Kept.
+

@@ -103,3 +103,8 @@ extern float	d_scalemip[3];
 
 extern void (*d_drawspans) (espan_t *pspan);
 
+// d_zjob.c: world z-buffer fill on the second core
+qboolean D_ZJobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv);
+void D_ZJobsStart (void);
+void D_ZJobsWait (void);
+
