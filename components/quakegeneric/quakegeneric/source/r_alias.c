@@ -94,6 +94,7 @@ qboolean R_AliasCheckBBox (void)
 	float				zi, basepts[8][3], v0, v1, frac;
 	finalvert_t			*pv0, *pv1, viewpts[16];
 	auxvert_t			*pa0, *pa1, viewaux[16];
+	qboolean			allabove = true, allbelow = true;	// relative to the current band
 	maliasframedesc_t	*pframedesc;
 	qboolean			zclipped, zfullyclipped;
 	unsigned			anyclip, allclip;
@@ -227,10 +228,18 @@ qboolean R_AliasCheckBBox (void)
 
 		anyclip |= flags;
 		allclip &= flags;
+
+		if (v1 >= r_band_top - 1)
+			allabove = false;
+		if (v1 <= r_band_bottom + 1)
+			allbelow = false;
 	}
 
 	if (allclip)
 		return false;	// trivial reject off one side
+
+	if (r_band_active && (allabove || allbelow))
+		return false;	// doesn't touch the band being rendered
 
 	currententity->trivial_accept = !anyclip & !zclipped;
 
@@ -712,6 +721,11 @@ void R_AliasDrawModel (alight_t *plighting)
 	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
 
 	R_AliasSetupSkin ();
+// "trivially accepted" means fully inside the view, not inside the current band;
+// banded frames must clip every model to the band (r_refdef.aliasvrect)
+	if (r_band_active)
+		currententity->trivial_accept = 0;
+
 	R_AliasSetUpTransform (currententity->trivial_accept);
 	R_AliasSetupLighting (plighting);
 	R_AliasSetupFrame ();

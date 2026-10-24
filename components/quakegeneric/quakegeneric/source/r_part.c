@@ -625,6 +625,15 @@ void R_DrawParticles (void)
 	time1 = frametime * 5;
 	grav = frametime * sv_gravity.value * 0.05;
 	dvel = 4*frametime;
+
+	if (r_band_active && !r_band_last)
+	{
+		for (p=active_particles ; p ; p=p->next)
+			if (p->die >= cl.time)
+				D_DrawParticle (p);
+		D_EndParticles ();
+		return;
+	}
 	
 	for ( ;; ) 
 	{

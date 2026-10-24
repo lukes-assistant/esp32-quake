@@ -66,6 +66,9 @@ void D_SpriteDrawSpans (sspan_t *pspan)
 		if (count <= 0)
 			goto NextSpan;
 
+		if (r_band_active && (pspan->v < r_band_top || pspan->v > r_band_bottom))
+			goto NextSpan;
+
 	// calculate the initial s/z, t/z, 1/z, s, and t and clamp
 		du = (float)pspan->u;
 		dv = (float)pspan->v;

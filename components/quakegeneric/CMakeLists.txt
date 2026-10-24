@@ -47,6 +47,7 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/pr_exec.c
 	${QUAKE_SOURCE_DIR}/source/r_aclip.c
 	${QUAKE_SOURCE_DIR}/source/r_alias.c
+	${QUAKE_SOURCE_DIR}/source/r_band.c
 	${QUAKE_SOURCE_DIR}/source/r_bsp.c
 	${QUAKE_SOURCE_DIR}/source/r_draw.c
 	${QUAKE_SOURCE_DIR}/source/r_edge.c

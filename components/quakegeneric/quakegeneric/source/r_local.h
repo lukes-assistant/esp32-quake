@@ -238,6 +238,16 @@ qboolean R_AliasCheckBBox (void);
 // particle stuff
 
 void R_DrawParticles (void);
+
+// r_band.c: banded rendering into SRAM buffers (ESP32-P4)
+extern cvar_t	r_bands;
+extern qboolean	r_band_active, r_band_last, r_bands_drew;
+extern int		r_band_top, r_band_bottom;
+qboolean R_BandsBegin (void);
+void R_BandFinish (void);
+void R_BandsEnd (void);
+void R_DrawEntitiesOnList (void);
+void R_DrawViewModel (void);
 void R_InitParticles (void);
 void R_ClearParticles (void);
 void R_ReadPointFile_f (void);

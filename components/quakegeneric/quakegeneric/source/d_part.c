@@ -92,6 +92,35 @@ void D_DrawParticle (particle_t *pparticle)
 	else if (pix > d_pix_max)
 		pix = d_pix_max;
 
+	if (r_band_active)
+	{
+		int rows = pix << d_y_aspect_shift;
+
+		if (v + rows - 1 < r_band_top || v > r_band_bottom)
+			return;
+		if (v < r_band_top || v + rows - 1 > r_band_bottom)
+		{
+			int y, x;
+
+			for (y = v ; y < v + rows ; y++)
+			{
+				if (y < r_band_top || y > r_band_bottom)
+					continue;
+				pz = d_pzbuffer + (d_zwidth * y) + u;
+				pdest = d_viewbuffer + d_scantable[y] + u;
+				for (x = 0 ; x < pix ; x++)
+				{
+					if (pz[x] <= izi)
+					{
+						pz[x] = izi;
+						pdest[x] = pparticle->color;
+					}
+				}
+			}
+			return;
+		}
+	}
+
 	switch (pix)
 	{
 	case 1:

@@ -208,6 +208,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_maxsurfs);
 	Cvar_RegisterVariable (&r_numsurfs);
 	Cvar_RegisterVariable (&r_reportedgeout);
+	Cvar_RegisterVariable (&r_bands);
 	Cvar_RegisterVariable (&r_maxedges);
 	Cvar_RegisterVariable (&r_numedges);
 	Cvar_RegisterVariable (&r_aliastransbase);
@@ -604,6 +605,9 @@ void R_DrawViewModel (void)
 	VectorCopy (currententity->origin, r_entorigin);
 	VectorSubtract (r_origin, r_entorigin, modelorg);
 
+	if (r_band_active && !R_AliasCheckBBox ())
+		return;		// not in the band being rendered
+
 	VectorCopy (vup, viewlightvec);
 	VectorInverse (viewlightvec);
 
@@ -962,6 +966,7 @@ SetVisibilityByPassages ();
 		VID_LockBuffer ();
 	}
 	
+	r_bands_drew = false;
 	R_EdgeDrawing ();
 
 	if (!r_dspeeds.value)
@@ -977,7 +982,8 @@ SetVisibilityByPassages ();
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
+	if (!r_bands_drew)
+		R_DrawEntitiesOnList ();
 
 	if (r_dspeeds.value)
 	{
@@ -985,7 +991,8 @@ SetVisibilityByPassages ();
 		dv_time1 = de_time2;
 	}
 
-	R_DrawViewModel ();
+	if (!r_bands_drew)
+		R_DrawViewModel ();
 
 	if (r_dspeeds.value)
 	{
@@ -993,7 +1000,8 @@ SetVisibilityByPassages ();
 		dp_time1 = Sys_FloatTime ();
 	}
 
-	R_DrawParticles ();
+	if (!r_bands_drew)
+		R_DrawParticles ();
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();

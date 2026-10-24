@@ -103,3 +103,7 @@ extern float	d_scalemip[3];
 
 extern void (*d_drawspans) (espan_t *pspan);
 
+// r_band.c: rows of the band being rendered (ESP32-P4 banded rendering)
+extern qboolean	r_band_active;
+extern int		r_band_top, r_band_bottom;
+

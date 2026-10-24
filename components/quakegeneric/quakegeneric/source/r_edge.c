@@ -644,6 +644,7 @@ void R_ScanEdges (void)
 	static byte	basespans[MAXSPANS*sizeof(espan_t)+CACHE_SIZE];	// internal SRAM, not stack
 	espan_t	*basespan_p;
 	surf_t	*s;
+	qboolean	bands;
 
 	basespan_p = (espan_t *)
 			((intptr_t)(basespans + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
@@ -683,6 +684,8 @@ void R_ScanEdges (void)
 //
 	bottom = r_refdef.vrectbottom - 1;
 
+	bands = !r_drawculledpolys && R_BandsBegin ();
+
 	for (iv=r_refdef.vrect.y ; iv<bottom ; iv++)
 	{
 		current_iv = iv;
@@ -699,8 +702,8 @@ void R_ScanEdges (void)
 		(*pdrawfunc) ();
 
 	// flush the span list if we can't be sure we have enough spans left for
-	// the next scan
-		if (span_p >= max_span_p)
+	// the next scan, or at the end of a band
+		if (span_p >= max_span_p || (bands && iv == r_band_bottom))
 		{
 			VID_UnlockBuffer ();
 			S_ExtraUpdate ();	// don't let sound get messed up if going slow
@@ -720,6 +723,9 @@ void R_ScanEdges (void)
 				s->spans = NULL;
 
 			span_p = basespan_p;
+
+			if (bands && iv == r_band_bottom)
+				R_BandFinish ();
 		}
 
 		if (removeedges[iv])
@@ -747,6 +753,12 @@ void R_ScanEdges (void)
 		R_DrawCulledPolys ();
 	else
 		D_DrawSurfaces ();
+
+	if (bands)
+	{
+		R_BandFinish ();
+		R_BandsEnd ();
+	}
 }
 
 

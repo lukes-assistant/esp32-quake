@@ -160,3 +160,60 @@ Current best before this step: -O3 for quakegeneric, 256 KB L2, 128 B lines: 22.
 - **24.57 fps (-4.1% vs 25.63)**. Flash fetches are slower than PSRAM via L2. Reverted
   (XIP from PSRAM on, flash 40 MHz, min rev v0.0).
 
+Commit 739680e: step 1 changes kept so far (-O3, single-precision constants, static SRAM
+edge/surface/span arrays, big stack arrays static in PSRAM with a 32 KB internal stack, hot
+doubles -> float). Re-measured **25.64 fps** (from 21.96 baseline: +17%).
+
+### Experiment: colormap copy in internal SRAM (vid.colormap -> heap_caps_malloc INTERNAL)
+- **25.88 fps (+0.9%)** for ~16.6 KB of internal RAM. Not a strong win; internal RAM is
+  needed for banding. Reverted.
+
+### Internal RAM audit before banding
+- `idf.py size-components`: libquakegeneric uses 197 KB of internal .bss. Largest internal
+  symbols: ledges 38 KB, lsurfs 29 KB, cl_static_entities 23.5 KB, basespans 19 KB,
+  dma_buffer (audio, main/audio.c) 16 KB, cl_temp_entities 11.8 KB, cl_efrags 10 KB.
+
+### Experiment: cl_static_entities, cl_temp_entities, cl_efrags and audio dma_buffer -> PSRAM
+- EXT_RAM_BSS_ATTR on all four (~61 KB). An upstream comment said keeping the cl_ tables
+  internal was worth 0.5 fps in an older build.
+- **25.62 fps (vs 25.64: no change)**. Free internal RAM 59 KB -> 121 KB (largest block
+  45 KB). Kept, to make room for band buffers.
+
+## 2026-10-24 — Step 2: banded rendering (world, models and particles per band in SRAM)
+
+### Design (components/quakegeneric/quakegeneric/source/r_band.c)
+- R_ScanEdges already walks rows top to bottom. At the last row of each band it flushes the
+  spans (D_DrawSurfaces), then R_BandFinish draws entities, view model and particles for the
+  band and copies the band's pixels to the real framebuffer. Band framebuffer and z-buffer
+  are static arrays in internal SRAM; d_viewbuffer/d_pzbuffer are biased by the band's top
+  row and zspantable is updated, so all existing drawing code works unchanged. The z-buffer
+  never touches PSRAM.
+- Clipping: alias models via r_refdef.aliasvrect; particles and sprite spans check the band
+  rows; before the last band, R_DrawParticles only draws (the last band also runs physics).
+  World state (modelorg, r_entorigin, currententity) is saved and restored around the
+  per-band entity pass, since D_DrawSurfaces depends on it.
+- Bugs found on the way: (1) crash (Load access fault in xTaskGenericNotify; draw_task_handle
+  overwritten): models that R_AliasCheckBBox "trivially accepts" (fully on screen) skip
+  aliasvrect clipping and wrote rows outside the band. Fixed by disabling trivial accept in
+  banded frames. (2) With 48-row bands plus the profiler, USB HID enumeration of the gaming
+  keyboard/mouse failed with ESP_ERR_NO_MEM (internal RAM), aborting; the board then sat in
+  the GDB stub and needed a JTAG reset (openocd -f board/esp32p4-builtin.cfg -c "init; reset
+  run; shutdown") before it could be flashed again.
+
+### Results (current best without bands: 25.62 fps)
+- 48-row bands (6 bands, 72 KB SRAM): **24.57 fps (-4%)**.
+- 32-row bands (9 bands, 48 KB SRAM): **22.73 fps (-11%)**. Profile: D_DrawZSpans fell from
+  ~10% to 4%, but per-band repeats of model work appeared: R_AliasPreparePoints 6.4%,
+  memcpy (band copy-out) 3.6%, D_DrawParticle 2.0%, RecursiveLightPoint 1.5%, sin/cos.
+- 32-row bands + per-band model culling (R_AliasCheckBBox rejects models whose projected
+  bbox doesn't touch the band; view model too): **24.23 fps (-5.4%)**.
+  R_AliasPreparePoints 2.4%. Remaining costs: memcpy 4.0%, D_DrawParticle 2.4%, extra
+  span flushes; core 0 now idles 4.1% (esp_cpu_wait_for_intr) waiting for the display.
+
+### Conclusion
+- Banding works but nets negative here. It only speeds up z/pixel writes (~5% of the frame);
+  the dominant costs, D_DrawSpans8 (~24%) and surface-cache building (~13%), read textures
+  from PSRAM and are untouched. Even removing all band overheads would leave only a few %
+  gain, for ~50-70 KB of internal RAM that USB also needs. Parked on branch
+  `banding-experiment` (commit below); main branch reverted to non-banded.
+

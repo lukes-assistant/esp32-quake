@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "bsp/esp-bsp.h"
+#include "esp_attr.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_codec_dev.h"
 #include "driver/i2c_master.h"
@@ -32,7 +33,7 @@ int snd_inited;
 //note: keep >64 and power of 2
 #define BUFFER_SIZE		(16*1024)
 
-unsigned char dma_buffer[BUFFER_SIZE];
+EXT_RAM_BSS_ATTR unsigned char dma_buffer[BUFFER_SIZE];
 
 int dma_rpos;
 
