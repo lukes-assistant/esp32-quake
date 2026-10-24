@@ -17,7 +17,7 @@ Features
  * Audio support through the 3.5mm headphone jack. Both digital sound, as well as music if a
    .cue/.bin image of the original CDROM is provided.
 
- * Supports USB keyboard for input
+ * Supports USB keyboard and mouse for input (full-speed devices only, see below)
 
  * Network multiplayer support over the Ethernet port
 
@@ -29,9 +29,10 @@ Hardware required
 
  * An HDMI monitor or TV that accepts 1280x720 at 60Hz, and an HDMI cable.
 
- * A USB keyboard, plugged into any of the four USB-A ports. These sit behind the board's
-   onboard USB hub; a further hub with keyboard and mouse should also work, but has not been
-   tested.
+ * A **full-speed** USB keyboard (and optionally mouse), plugged into any of the four USB-A
+   ports. Gaming keyboards and mice are usually full-speed; most basic office keyboards and
+   mice are low-speed and will **not** work. See [USB input](#usb-input) for why, and how to
+   check a device.
 
  * Headphones or powered speakers for the 3.5mm jack if you want sound. HDMI is video-only on
    this board, and there is no onboard speaker amplifier.
@@ -113,6 +114,23 @@ Now insert the micro-SD-card with the Quake data files into the board's micro-SD
 the HDMI monitor and a keyboard, reset the board, and have fun! Connect HDMI before powering
 or resetting the board so the monitor syncs reliably.
 
+USB input
+---------
+
+The four USB-A ports sit behind an onboard high-speed (USB 2.0) hub. Talking to a full- or
+low-speed device through a high-speed hub needs the hub's transaction translator, which
+ESP-IDF's USB host does not support. As a workaround, this port runs the ESP32-P4's USB host
+controller in full-speed-only mode, so the hub works as a full-speed hub. Full-speed keyboards
+and mice then work (tested with a gaming keyboard and a 1000Hz gaming mouse), but low-speed
+devices still fail to enumerate behind the hub; the serial log shows
+`ENUM: [1:x] CHECK_SHORT_DEV_DESC FAILED` for them.
+
+To check a device's speed, plug it into a Linux PC and run `lsusb -t`: `12M` is full-speed
+and works, `1.5M` is low-speed and does not.
+
+Quake turns with the mouse by default; for full mouse look, enable "Always Mouse Look" in the
+Options menu or type `+mlook` in the console.
+
 Chip revision
 -------------
 
@@ -157,7 +175,7 @@ Espressif's EV-Board BSP. The differences, and how this port handles them:
 | Render size | 512x300 | 1280x720 is 16:9 | 512x288, an exact 2.5x scale |
 | Serial console | UART via a USB-UART bridge | USB-C is the chip's USB Serial/JTAG | Console on USB Serial/JTAG |
 | SD card power | Always on | Switched by GPIO45 (SD1_PWR_EN, active low) | Powered on at startup; mounted at 20MHz, the speed Olimex validated |
-| USB host | One USB-A port | Four USB-A ports behind an FE1.1s hub, reset on GPIO21 (active low) | Hub reset pulsed at startup; nested hubs enabled |
+| USB host | One USB-A port, keyboard connected directly | Four USB-A ports behind an FE1.1s high-speed hub, reset on GPIO21 (active low) | Hub reset pulsed at startup; host forced to full-speed so full-speed devices work behind the hub (low-speed devices don't, see [USB input](#usb-input)) |
 | Audio output | Speaker amplifier enabled by GPIO53 | 3.5mm headphone jack only; GPIO53 is the UEXT SPI MOSI pin | Unchanged; the BSP still toggles GPIO53, which only matters if something is attached to UEXT |
 
 The board support package in `components/esp-bsp` is the HDMI-capable snapshot from Olimex's
