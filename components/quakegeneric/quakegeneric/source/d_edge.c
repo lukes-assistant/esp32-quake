@@ -201,7 +201,8 @@ void D_DrawSurfaces (void)
 	}
 	else
 	{
-	// queue the z-buffer fill for the other core, then draw the pixels here
+	// queue the z-buffer fill for the other core; textured spans are queued as colour jobs
+	// that both cores draw in D_JobsFinish
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
 			if (!s->spans)
@@ -210,7 +211,7 @@ void D_DrawSurfaces (void)
 					D_ZJobAdd (s->spans, -0.9, 0, 0) :
 					D_ZJobAdd (s->spans, s->d_ziorigin, s->d_zistepu, s->d_zistepv);
 		}
-		D_ZJobsStart ();
+		D_JobsStart ();
 
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
@@ -318,7 +319,8 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 
-				(*d_drawspans) (s->spans);
+				if (d_drawspans != D_DrawSpans8 || !D_ColorJobAdd (s->spans))
+					(*d_drawspans) (s->spans);
 
 				if (!s->zqueued)
 					D_DrawZSpans (s->spans);
@@ -341,7 +343,7 @@ void D_DrawSurfaces (void)
 				}
 			}
 		}
-		D_ZJobsWait ();
+		D_JobsFinish ();
 	}
 }
 

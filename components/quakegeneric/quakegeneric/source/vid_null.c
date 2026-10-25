@@ -63,7 +63,9 @@ void	VID_Init (unsigned char *palette)
 	
 	d_pzbuffer = zbuffer;
 
-	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT);
+	// 3x the usual size: span drawing is deferred to after all surfaces of a flush are
+	// cached (d_jobs.c), so a block must survive until the end of the flush
+	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT) * 3;
 	surfcache = malloc(surfcache_size);
 	D_InitCaches (surfcache, surfcache_size);
 

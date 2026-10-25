@@ -315,3 +315,19 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 - **20.45 fps (+9.8% vs 18.63)**. Core 1 convert 17.4 ms (was 15.6; it now shares the core).
   Internal RAM free 120 -> 100 KB (16 KB job queue + 4 KB task stack). Kept.
 
+### Experiment: textured world spans shared between both cores (d_jobs.c, replaces d_zjob.c)
+- Each D_DrawSurfaces flush now has two phases. Phase 1: core 0 builds surface caches and
+  gradients as before, but queues normal textured surfaces as "colour jobs" (span list +
+  cacheblock/cachewidth + all D_CalcGradients/z gradients) instead of drawing them; core 1
+  meanwhile does the z jobs. Phase 2: both cores draw colour jobs, claimed with an atomic
+  counter (__atomic_fetch_add; the core has the A extension). Sky, water and background
+  surfaces stay on core 0. D_DrawSpans8Job is D_DrawSpans8 with the gradients passed in
+  (same arithmetic). Colour job queue (1024 x ~80 B) in PSRAM.
+- Surface cache made 3x larger (PSRAM), since a block now has to survive until the end of
+  its flush rather than just until its spans are drawn.
+- First run **hung**: ulTaskNotifyTake(pdTRUE) clears the whole notification count, so when
+  both "start z" and "start colour" were pending the worker consumed both and then waited
+  forever. Fixed with pdFALSE (take one at a time).
+- **23.36 fps (+14% vs 20.45)**. Core 1 is now close to saturated: palette convert takes
+  26.9 ms of wall time (preempted by the job worker); the game waits 0.37 ms/frame for it.
+
