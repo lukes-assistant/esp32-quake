@@ -443,6 +443,33 @@ void SCR_DrawLoading (void)
 SCR_SetUpToDrawConsole
 ==================
 */
+/*
+==================
+SCR_TileClearOutsideView
+
+ESP32-P4 port: Draw_TileClear, minus the 3D view if it will be drawn over this frame anyway
+(while the console scrolls, the area below it was cleared every frame).
+==================
+*/
+static void SCR_TileClearOutsideView (int x, int y, int w, int h)
+{
+	int		top, bottom;
+
+	if (con_forcedup || scr_vrect.x > x || scr_vrect.x + scr_vrect.width < x + w)
+	{
+		Draw_TileClear (x, y, w, h);	// no view, or not covering the full width
+		return;
+	}
+	top = scr_vrect.y;
+	bottom = scr_vrect.y + scr_vrect.height;
+	if (bottom == vid.height - sb_lines)
+		bottom = vid.height;	// the status bar below it is redrawn in full (Sbar_Changed)
+	if (y < top)
+		Draw_TileClear (x, y, w, (y + h < top ? y + h : top) - y);
+	if (y + h > bottom)
+		Draw_TileClear (x, (y > bottom ? y : bottom), w, y + h - (y > bottom ? y : bottom));
+}
+
 void SCR_SetUpToDrawConsole (void)
 {
 	Con_CheckResize ();
@@ -480,7 +507,7 @@ void SCR_SetUpToDrawConsole (void)
 	if (clearconsole++ < vid.numpages)
 	{
 		scr_copytop = 1;
-		Draw_TileClear (0,(int)scr_con_current,vid.width, vid.height - (int)scr_con_current);
+		SCR_TileClearOutsideView (0,(int)scr_con_current,vid.width, vid.height - (int)scr_con_current);
 		Sbar_Changed ();
 	}
 	else if (clearnotify++ < vid.numpages)

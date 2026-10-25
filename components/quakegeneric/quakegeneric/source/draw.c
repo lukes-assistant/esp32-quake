@@ -465,6 +465,17 @@ static void Draw_ConsoleBackground_exec (byte *dbuf, int lines, qpic_t *conback)
 		src = conback->data + v*320;
 		if (vid.conwidth == 320)
 			memcpy (dest, src, vid.conwidth);
+		else if (vid.conwidth == 640 && !((intptr_t)dest & 3))
+		{	// ESP32-P4 port: exactly 2x, 4 pixels per store
+			unsigned	*d32 = (unsigned *)dest;
+
+			for (x=0 ; x<320 ; x+=2)
+			{
+				unsigned	a = src[x], b = src[x+1];
+
+				*d32++ = a | (a << 8) | (b << 16) | (b << 24);
+			}
+		}
 		else
 		{
 			f = 0;

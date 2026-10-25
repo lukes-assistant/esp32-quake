@@ -703,3 +703,19 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   span drawing (D_PolysetDrawSpans8_c1) is 14.1% of its time; Draw_ConsoleBackground +
   Draw_Character (console scrolling up at the start of the demo) 3.9%.
 
+### Diagnostic: who calls memcpy on core 0 (2.6% of its time)
+- Linker --wrap=memcpy (IRAM wrapper; a flash one crashed at boot) counting bytes per caller.
+  Result: 34.8 KB/frame, 543 calls/frame from R_DrawRect, i.e. Draw_TileClear: while the
+  console scrolls up at the start of the demo, SCR_SetUpToDrawConsole tile-clears everything
+  below it every frame, and the 3D view and status bar then overwrite it all.
+
+### Experiment: don't tile-clear under the 3D view / status bar while the console scrolls
+- SCR_TileClearOutsideView: skip the rows the 3D view covers (if it's drawn this frame and
+  spans the full width), and the status bar rows (Sbar_Changed redraws them in full).
+  memcpy from R_DrawRect 34.8 -> 3.9 KB/frame. **43.87 fps (+1.6% vs 43.17)**. Kept.
+- (Only affects frames with the console moving; in the benchmark window that is the start.)
+
+### Experiment: Draw_ConsoleBackground fast path for exactly 2x (640 wide), word stores
+- Same pixels as the generic 16.16 stepping loop (fstep = 0.5). **44.10 fps (+0.5%)**. Kept
+  (it's on core 1 now, which still has some slack).
+
