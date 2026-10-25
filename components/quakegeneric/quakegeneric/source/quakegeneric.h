@@ -68,5 +68,9 @@ void QG_GetJoyAxes(float *axes);
 //called when a timedemo starts timing (second demo frame) and when it finishes
 void QG_TimeDemoStart(void);
 void QG_TimeDemoEnd(int frames, float seconds);
+//asynchronous SRAM -> PSRAM copies (main/bandcopy.c); a ticket of 0 means already done
+int QG_CopyInit(void);
+uint32_t QG_CopyStart(void *dst, void *src, size_t n);
+void QG_CopyWait(uint32_t ticket);
 
 #endif // __QUAKEGENERIC__

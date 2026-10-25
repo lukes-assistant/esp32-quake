@@ -765,3 +765,39 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
 - Screenshots: gun, models and particles correct. 4 minutes through all demos: no faults.
 - **46.49 fps (+2.7% vs 45.25)**. Kept.
 
+### Experiment: surface block builders (mip0/mip1) with locals and 32-bit stores
+- **46.62 fps (+0.3%, noise)**. The compiler was already doing fine. Reverted.
+
+## 2026-10-25 — Banded world drawing with DMA copy-out (the tile/band renderer, take 2)
+
+### Diagnostics first
+- Span loop statistics (cycle counter around D_DrawSpans8Job): ~140k pixels per core per
+  frame, ~65 pixels per span (most spans >= 64), **22 cycles per pixel** for ~12 instructions:
+  memory stalls dominate, not per-span overhead.
+- Span writes to a dummy SRAM line (upper bound for frame-buffer writes): **50.30 fps vs
+  46.49 (+8.2%)**.
+
+### Design (r_edge.c, main/bandcopy.c)
+- The world is drawn into one of two 16-row band buffers in internal RAM (2 x 10 KB);
+  d_viewbuffer points into the band, biased by its top row, so all span drawers (sky, water,
+  background on core 0, textured spans as jobs on both cores; each job remembers its
+  viewbuffer) work unchanged. R_ScanEdges flushes at the end of every band.
+- At the end of band k, band k-1's jobs are waited for (they had a band's time) and band k-1
+  is copied to the PSRAM frame buffer by GDMA. Band k+1 reuses k-1's buffer, so its copy is
+  only waited for at band k+1's first flush (a band's worth of scanning later). After the last
+  flush and D_JobsEndFrame, the last two bands are copied out (one copy at a time).
+- Frame buffers are 128-byte aligned; before each copy the destination rows are invalidated
+  in the cache (the driver doesn't) and the source written back.
+- First version used esp_async_memcpy: per-copy heap allocations (link lists, a stash
+  buffer) plus critical sections cost ~7% of core 0, and a scheduling bug made core 0 wait
+  for each copy right after starting it (QG_CopyWait 6.9%): 45.39 fps. Fixed schedule:
+  46.39. 32-row bands: out of internal RAM (USB host and the driver's stash allocations
+  failed). Then a lean direct GDMA driver (one AXI channel pair, link lists allocated once,
+  remounted per copy): **48.84 fps**. (Its first run timed out once per frame: the last two
+  copies were started back to back; now serialized.)
+- QG_CopyWait has a 20 ms timeout as a safety net (prints a message); never triggered.
+
+### Result
+- **48.84-48.89 fps (+5.1% vs 46.49)**. Screenshots correct (no seams). 4 minutes through all
+  demos: no faults, no copy timeouts. Internal RAM free 44.6 KB (largest block 31 KB).
+

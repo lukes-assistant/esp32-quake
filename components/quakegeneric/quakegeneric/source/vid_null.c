@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "r_pipe.h"
 
 #include "quakegeneric.h"
+#include "esp_heap_caps.h"
 
 viddef_t	vid;				// global video state
 
@@ -60,9 +61,9 @@ void	VID_Init (unsigned char *palette)
 {
 	zbuffers[0] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(short));
 	zbuffers[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(short));
-	vid_buffer[0] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
-	vid_buffer[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
-	vid_buffer[2] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
+	// cache-line (128 B) aligned: the world's bands are copied in by DMA (r_edge.c)
+	for (int i = 0 ; i < 3 ; i++)
+		vid_buffer[i] = heap_caps_aligned_calloc(128, BASEWIDTH*BASEHEIGHT, 1, MALLOC_CAP_SPIRAM);
 	d_gunzbuffer = calloc(BASEWIDTH*BASEHEIGHT, sizeof(unsigned));	// view model (d_polyse.c)
 	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
 	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
@@ -81,6 +82,12 @@ void	VID_Init (unsigned char *palette)
 	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT) * 3;
 	surfcache = malloc(surfcache_size);
 	D_InitCaches (surfcache, surfcache_size);
+
+	{
+		extern qboolean	r_bandcopy;
+
+		r_bandcopy = QG_CopyInit ();
+	}
 
 	// quake generic
 	QG_Init();

@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "r_local.h"
+#include "quakegeneric.h"
 #include "d_local.h"	// D_Jobs*
 
 #if 0
@@ -639,6 +640,129 @@ Output:
 Each surface has a linked list of its visible spans
 ==============
 */
+/*
+==============
+Banded frame buffer (ESP32-P4 port)
+
+The world is drawn into one of two small internal-RAM band buffers instead of the PSRAM
+frame buffer (d_viewbuffer points into the band, biased by its top row, so every span
+drawer works unchanged; queued jobs remember it). The span list is flushed at the end of
+every band; once a band's jobs are done, the band is copied to the frame buffer by DMA
+(main/bandcopy.c) while the next ones are drawn. PSRAM write-allocate misses on the frame
+buffer were ~8% of the frame.
+==============
+*/
+#define BAND_ROWS	16
+#define BAND_WIDTH	640		// wider views draw straight into the frame buffer
+
+qboolean	r_bandcopy;		// the DMA copy is available (vid_null.c)
+static byte	bandbuf[2][BAND_ROWS * BAND_WIDTH] __attribute__((aligned(128)));
+
+typedef struct
+{
+	int			top, rows;
+	int			firstjob, lastjob;
+	uint32_t	ticket;			// its copy (QG_CopyWait)
+	qboolean	copying;
+} band_t;
+
+static band_t	bands[2];		// the current band and the previous one, by index & 1
+static int		curband;
+static pixel_t	*band_framebuffer;	// the real d_viewbuffer
+static qboolean	banding;
+static qboolean	band_needwait;	// the current band's buffer may still be being copied out
+
+static void R_BandReady (void);
+
+static void R_BandSetBuffer (int b)
+{
+	band_t	*band = &bands[b & 1];
+
+	band->top = r_refdef.vrect.y + b * BAND_ROWS;
+	band->rows = r_refdef.vrectbottom - band->top;
+	if (band->rows > BAND_ROWS)
+		band->rows = BAND_ROWS;
+	band->firstjob = D_JobsCount ();
+	d_viewbuffer = (pixel_t *)(bandbuf[b & 1] - band->top * screenwidth);
+}
+
+// all of the band's jobs are done: copy it out
+static void R_BandCopy (int b)
+{
+	band_t	*band = &bands[b & 1];
+
+	band->ticket = QG_CopyStart (band_framebuffer + band->top * screenwidth, bandbuf[b & 1],
+			band->rows * screenwidth);
+	band->copying = true;
+}
+
+static void R_BandWaitCopy (int b)
+{
+	band_t	*band = &bands[b & 1];
+
+	if (band->copying)
+	{
+		QG_CopyWait (band->ticket);
+		band->copying = false;
+	}
+}
+
+static void R_BandBegin (void)
+{
+	banding = r_bandcopy && !r_dowarp && screenwidth <= BAND_WIDTH &&
+			r_refdef.vrect.x == 0 && r_refdef.vrect.width == screenwidth;
+	if (!banding)
+		return;
+	band_framebuffer = d_viewbuffer;
+	bands[0].copying = bands[1].copying = false;
+	band_needwait = false;
+	curband = 0;
+	R_BandSetBuffer (0);
+}
+
+// called after the flush at the end of a band's last row
+static void R_BandNext (void)
+{
+	bands[curband & 1].lastjob = D_JobsCount ();
+	R_BandReady ();	// (normally done at the band's flush already) one copy at a time
+	if (curband >= 1)
+	{	// the previous band: its jobs have had a band's time to finish
+		D_JobsWaitRange (bands[(curband - 1) & 1].firstjob, bands[(curband - 1) & 1].lastjob);
+		R_BandCopy (curband - 1);
+	}
+	curband++;
+	// its buffer was band curband-2's, whose copy was only just started: it is waited for
+	// at this band's first flush (R_BandReady), giving the DMA a band's worth of scanning
+	band_needwait = true;
+	R_BandSetBuffer (curband);
+}
+
+// before anything is drawn into the current band's buffer
+static void R_BandReady (void)
+{
+	if (banding && band_needwait)
+	{
+		R_BandWaitCopy (curband - 2);
+		band_needwait = false;
+	}
+}
+
+// after the last flush and D_JobsEndFrame (all jobs done)
+static void R_BandEnd (void)
+{
+	if (!banding)
+		return;
+	R_BandReady ();
+	bands[curband & 1].lastjob = D_JobsCount ();
+	if (curband >= 1 && !bands[(curband - 1) & 1].copying)
+		R_BandCopy (curband - 1);
+	R_BandWaitCopy (curband - 1);	// (one copy at a time)
+	R_BandCopy (curband);
+	R_BandWaitCopy (curband);
+	d_viewbuffer = band_framebuffer;
+	banding = false;
+}
+
 void R_ScanEdges (void)
 {
 	int		iv, bottom;
@@ -651,6 +775,7 @@ void R_ScanEdges (void)
 	surf_t	*s;
 
 	D_JobsBeginFrame ();
+	R_BandBegin ();
 	curbuf = 0;
 	bufjobs[0][0] = bufjobs[0][1] = bufjobs[1][0] = bufjobs[1][1] = 0;
 
@@ -722,6 +847,7 @@ void R_ScanEdges (void)
 			}
 			else
 			{
+				R_BandReady ();
 				D_DrawSurfaces ();
 			}
 			bufjobs[curbuf][0] = firstjob;
@@ -739,6 +865,26 @@ void R_ScanEdges (void)
 			max_span_p = &basespan_p[MAXSPANS - r_refdef.vrect.width];
 			span_p = basespan_p;
 		}
+
+	// end of a band: flush, so it can be copied out once drawn
+		if (banding && iv == bands[curband & 1].top + BAND_ROWS - 1 && span_p != basespan_p)
+		{
+			firstjob = D_JobsCount ();
+			R_BandReady ();
+			D_DrawSurfaces ();
+			bufjobs[curbuf][0] = firstjob;
+			bufjobs[curbuf][1] = D_JobsCount ();
+			for (s = &surfaces[1] ; s<surface_p ; s++)
+				s->spans = NULL;
+			curbuf ^= 1;
+			D_JobsWaitRange (bufjobs[curbuf][0], bufjobs[curbuf][1]);
+			basespan_p = (espan_t *)
+					((intptr_t)(basespans[curbuf] + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
+			max_span_p = &basespan_p[MAXSPANS - r_refdef.vrect.width];
+			span_p = basespan_p;
+		}
+		if (banding && iv == bands[curband & 1].top + BAND_ROWS - 1)
+			R_BandNext ();
 
 		if (removeedges[iv])
 			R_RemoveEdges (removeedges[iv]);
@@ -761,6 +907,7 @@ void R_ScanEdges (void)
 	(*pdrawfunc) ();
 
 // draw whatever's left in the span list
+	R_BandReady ();
 	if (r_drawculledpolys)
 		R_DrawCulledPolys ();
 	else
@@ -768,6 +915,7 @@ void R_ScanEdges (void)
 
 // the entity pass needs the complete z-buffer
 	D_JobsEndFrame ();
+	R_BandEnd ();
 }
 
 

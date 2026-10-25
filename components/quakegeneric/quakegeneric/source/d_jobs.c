@@ -43,6 +43,7 @@ typedef struct
 	qboolean	color;		// draw textured spans (else z only)
 	qboolean	needbuild;	// build the surface-cache block first, using ds
 	pixel_t		*cacheblock;
+	pixel_t		*viewbuffer;	// d_viewbuffer when queued (a band buffer, r_edge.c)
 	int			cachewidth;
 	float		sdivzorigin, sdivzstepu, sdivzstepv;
 	float		tdivzorigin, tdivzstepu, tdivzstepv;
@@ -169,7 +170,7 @@ static void D_DrawSpans8Job (const job_t *job)
 
 	do
 	{
-		pdest = (unsigned char *)((byte *)d_viewbuffer +
+		pdest = (unsigned char *)((byte *)job->viewbuffer +
 				(screenwidth * pspan->v) + pspan->u);
 
 		count = pspan->count;
@@ -467,6 +468,7 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 	if (color)
 	{
 		job->cacheblock = cacheblock;
+		job->viewbuffer = d_viewbuffer;
 		job->cachewidth = cachewidth;
 		job->sdivzorigin = d_sdivzorigin;
 		job->sdivzstepu = d_sdivzstepu;
