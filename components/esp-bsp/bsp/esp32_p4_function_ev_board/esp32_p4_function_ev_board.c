@@ -754,6 +754,9 @@ esp_err_t bsp_display_new_with_handles(const bsp_display_config_t *config, bsp_l
         break;
     case BSP_HDMI_RES_640x480:
         ESP_LOGI(TAG, "HDMI configuration for 640x480@60HZ");
+        //YUVTEST: 16-bit YUV422 frame buffers, converted to RGB888 by the DSI bridge
+        dpi_configs[5].in_color_format = LCD_COLOR_FMT_YUV422;
+        dpi_configs[5].out_color_format = LCD_COLOR_FMT_RGB888;
         vendor_config.mipi_config.dpi_config = &dpi_configs[5];
         memcpy(&vendor_config.video_timing, &video_timings[5], sizeof(esp_lcd_panel_lt8912b_video_timing_t));
         break;
