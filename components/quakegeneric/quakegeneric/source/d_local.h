@@ -46,6 +46,7 @@ typedef struct surfcache_s
 	float				mipscale;
 	struct texture_s	*texture;	// checked for animating textures
 	int					usedframe;	// r_framecount when last used (d_jobs.c may still use it)
+	unsigned			dlightkey;	// hash of the dynamic lights it was built with
 	byte				data[4];	// width*height elements
 } surfcache_t;
 

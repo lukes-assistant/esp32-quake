@@ -580,3 +580,28 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   isn't safe. Removed entirely.
 - Clean build (fixes, no autoload, no debug code): **37.05 fps**, stable for 4 minutes.
 
+### Profile at the stable 36.7 fps (both cores)
+- Core 0: D_DrawSpans8Job 22.8%, R_DrawSurfaceBlock8_mip0 10.4%, idle 5.0%, D_PolysetDrawSpans8
+  3.9%, D_DrawZSpansJob 3.5%, R_GenerateSpans 3.5%, R_LeadingEdge 2.7%, R_RecursiveWorldNode
+  2.7%, memcpy 2.1%, CL_RelinkEntities 2.0%, Draw_ConsoleBackground 1.8% (console sliding up
+  during the first seconds of the window), FreeRTOS critical sections ~2.5%.
+- Core 1: D_DrawSpans8Job 31.6%, idle 31.3%, R_DrawSurfaceBlock8_mip0_c1 12.8%, alias ~10%.
+
+### Experiment: issue 8 texel loads before any store in the span loop (memory-level parallelism)
+- **36.83 fps (no gain)**: the cache doesn't overlap misses. Reverted.
+
+### Experiment: FreeRTOS tick 1000 Hz (was 100)
+- **36.79 fps (no gain)**. Reverted.
+
+### Experiment: adaptive left/right split column for the alias pass
+- Split column moved each frame towards equal drawing times on both cores.
+- **37.33 fps (+0.8%, too small)**. Reverted.
+
+### Experiment: reuse dynamically lit surface-cache blocks when their lights are unchanged
+- Quake rebuilds every dynamically lit surface every frame. Each cache block now keeps a hash
+  of the dynamic lights it was built with (index, origin, radius, minlight: everything
+  R_AddDynamicLights reads), and a lit block is reused if the same lights hit it again (plus
+  the usual texture/lightstyle checks). Same inputs, so the same texels: output unchanged.
+- Builds per frame 34.4 -> **16.9** (texels 226k -> 89k; dlight-caused 31.5 -> 14.1).
+- **39.38 fps (+6.3% vs 37.05)**. Kept.
+

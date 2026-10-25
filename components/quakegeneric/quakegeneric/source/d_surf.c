@@ -290,9 +290,37 @@ Doesn't touch the global r_drawsurf, which the other core uses while building.
 // many were built because of dynamic lights
 int d_stat_builds, d_stat_buildtexels, d_stat_dlightbuilds;
 
+/*
+D_DlightKey
+
+Hash of the dynamic lights that R_AddDynamicLights will apply to a surface (index, origin,
+radius, minlight). A surface lit by the same lights as last time doesn't need rebuilding.
+*/
+static unsigned D_DlightKey (msurface_t *surface)
+{
+	unsigned	h = 2166136261u;
+	int			lnum, i;
+	unsigned	w[6];
+
+	for (lnum = 0 ; lnum < MAX_DLIGHTS ; lnum++)
+	{
+		if (!(surface->dlightbits & (1 << lnum)))
+			continue;
+		w[0] = lnum;
+		memcpy (&w[1], cl_dlights[lnum].origin, 12);
+		memcpy (&w[4], &cl_dlights[lnum].radius, 4);
+		memcpy (&w[5], &cl_dlights[lnum].minlight, 4);
+		for (i = 0 ; i < 6 ; i++)
+			h = (h ^ w[i]) * 16777619u;
+	}
+	return h;
+}
+
 surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds)
 {
 	surfcache_t     *cache;
+	qboolean		dlit = (surface->dlightframe == r_framecount);
+	unsigned		dlightkey = dlit ? D_DlightKey (surface) : 0;
 
 	ds->texture = R_TextureAnimation (surface->texinfo->texture);
 	ds->lightadj[0] = d_lightstylevalue[surface->styles[0]];
@@ -302,7 +330,8 @@ surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean
 
 	cache = surface->cachespots[miplevel];
 
-	if (cache && !cache->dlight && surface->dlightframe != r_framecount
+	// (unlike the original, a dynamically lit block is reused if the same lights hit it)
+	if (cache && cache->dlight == dlit && cache->dlightkey == dlightkey
 			&& cache->texture == ds->texture
 			&& cache->lightadj[0] == ds->lightadj[0]
 			&& cache->lightadj[1] == ds->lightadj[1]
@@ -344,6 +373,7 @@ surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean
 
 	ds->surf = surface;
 	cache->usedframe = r_framecount;
+	cache->dlightkey = dlightkey;
 
 	c_surf++;
 	d_stat_builds++;
