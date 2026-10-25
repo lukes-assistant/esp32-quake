@@ -1161,3 +1161,17 @@ earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach,
     42.5 -> 38.4 KB, largest block 32 -> 21.5 KB (the USB/SD margin).
   - paintbuffer left in PSRAM: **52.62 fps (+0.6% vs 52.33)** (527 frames / 10.01 s),
     internal RAM unchanged (42.5 KB, largest 32 KB). Kept.
+
+### Candidate 8: convert in strips so the PPA's dummy foreground comes from internal RAM
+- The blend engine always reads a foreground the size of the block (its alpha is forced to 0,
+  so the contents don't matter); today that's the frame itself read again as A4 (150 KB of
+  PSRAM per frame). There is no mode without a foreground read, and fg/bg blocks must match,
+  so the only way to source it from SRAM is to convert in strips sharing one small
+  zeroed foreground buffer (24 rows = 7.5 KB, DMA_ATTR).
+- 20 blocking strips: **51.15 fps (-2.8% vs 52.62)**, conversion 7.67 ms vs 6.24 ms per
+  frame; ~70 us per PPA operation (driver setup, cache syncs, waking the draw task, which
+  preempts the core-1 job worker).
+- 19 queued non-blocking + last blocking: **51.46 fps (-2.2%)**, 6.97 ms; and the
+  pending-transaction storage costs internal RAM (free 42.5 -> 28.8 KB, largest 19 KB).
+- Reverted. Per-operation PPA cost makes many-small-op designs lose; the same applies to a
+  per-band PPA conversion (Candidate 2, 30 bands per frame) unless it needs far fewer ops.
