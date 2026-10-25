@@ -488,3 +488,20 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   pollutes the L1). Dropped.
 - L2 only, trigger on miss and hit: **36.74 fps (+4.8% vs 35.06)**. Kept.
 
+### Experiment: L1 I-cache autoload (both cores) on top of L2 autoload
+- **36.53 fps (no gain vs 36.74)**. Reverted.
+
+### Observed: occasional hang (not yet diagnosed)
+- The user saw the board hang (picture frozen). A 4-minute serial capture of the current build
+  reproduced it shortly after demo2 started: Fps lines simply stop, no panic or reboot.
+  JTAG attach (OpenOCD) and opening the serial port both reset the chip, so the hung state
+  couldn't be inspected. Suspects: the job system's cross-core waits, the PPA blend never
+  completing (display task holding the frame mutex), or cache autoload. The user asked to
+  set this aside and focus on performance for now.
+
+### Experiment: 16-pixel perspective subdivision in the span jobs (was 8)
+- One perspective-correct division per 16 pixels instead of 8, as the original DOS/Win Quake
+  did by default (d_subdiv16 with the asm D_DrawSpans16). Slightly different texel mapping
+  from the 8-pixel C path, same as the original game's look.
+- **37.77 fps (+2.8% vs 36.74)**. Kept.
+

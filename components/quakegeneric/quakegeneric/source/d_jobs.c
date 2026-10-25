@@ -141,6 +141,10 @@ D_DrawSpans8Job
 
 D_DrawSpans8 with the gradients passed in.
 */
+// pixels between perspective-correct divisions (the original Quake used 16 with d_subdiv16)
+#define SPAN_SUBDIV			16
+#define SPAN_SUBDIV_SHIFT	4
+
 static void D_DrawSpans8Job (const job_t *job)
 {
 	espan_t			*pspan = job->spans;
@@ -157,9 +161,9 @@ static void D_DrawSpans8Job (const job_t *job)
 
 	pbase = (const unsigned char *)job->cacheblock;
 
-	sdivz8stepu = job->sdivzstepu * 8.0f;
-	tdivz8stepu = job->tdivzstepu * 8.0f;
-	zi8stepu = job->zistepu * 8.0f;
+	sdivz8stepu = job->sdivzstepu * (float)SPAN_SUBDIV;
+	tdivz8stepu = job->tdivzstepu * (float)SPAN_SUBDIV;
+	zi8stepu = job->zistepu * (float)SPAN_SUBDIV;
 
 	do
 	{
@@ -189,7 +193,7 @@ static void D_DrawSpans8Job (const job_t *job)
 		else if (t < 0)
 			t = 0;
 
-		if (count > 8)
+		if (count > SPAN_SUBDIV)
 		{
 			sdivz += sdivz8stepu;
 			tdivz += tdivz8stepu;
@@ -199,9 +203,9 @@ static void D_DrawSpans8Job (const job_t *job)
 			for (;;)
 			{
 				float z_next;
-				unsigned char p0, p1, p2, p3, p4, p5, p6, p7;
+				int k;
 
-				count -= 8;
+				count -= SPAN_SUBDIV;
 
 				snext = (int)(sdivz * z) + sadjust;
 				if (snext > bbextents)
@@ -215,10 +219,10 @@ static void D_DrawSpans8Job (const job_t *job)
 				else if (tnext < 8)
 					tnext = 8;
 
-				sstep = (snext - s) >> 3;
-				tstep = (tnext - t) >> 3;
+				sstep = (snext - s) >> SPAN_SUBDIV_SHIFT;
+				tstep = (tnext - t) >> SPAN_SUBDIV_SHIFT;
 
-				if (count > 8)
+				if (count > SPAN_SUBDIV)
 				{
 					sdivz += sdivz8stepu;
 					tdivz += tdivz8stepu;
@@ -234,39 +238,25 @@ static void D_DrawSpans8Job (const job_t *job)
 					__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(z_next) : "f"(k65536), "f"(zi));
 				}
 
-				p0 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				p1 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				pdest[0] = p0;
-				pdest[1] = p1;
+				#pragma GCC unroll 16
+				for (k = 0 ; k < SPAN_SUBDIV ; k += 2)
+				{
+					unsigned char p0, p1;
 
-				p2 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				p3 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				pdest[2] = p2;
-				pdest[3] = p3;
-
-				p4 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				p5 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				pdest[4] = p4;
-				pdest[5] = p5;
-
-				p6 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				s += sstep; t += tstep;
-				p7 = pbase[(s >> 16) + (t >> 16) * cachewidth];
-				pdest[6] = p6;
-				pdest[7] = p7;
-				pdest += 8;
+					p0 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+					s += sstep; t += tstep;
+					p1 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+					s += sstep; t += tstep;
+					pdest[k] = p0;
+					pdest[k + 1] = p1;
+				}
+				pdest += SPAN_SUBDIV;
 
 				s = snext;
 				t = tnext;
 
 				z = z_next;
-				if (count <= 8)
+				if (count <= SPAN_SUBDIV)
 					break;
 			}
 
