@@ -1220,3 +1220,20 @@ D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3
   The render resolution barely matters; the output size does.
 - Internal RAM free 42.6 KB, largest block 32 KB. sdkconfig.defaults now selects
   CONFIG_BSP_LCD_HDMI_1280x720_60HZ; CONFIG_BSP_LCD_HDMI_640x480_60HZ is the ~52 fps mode.
+
+### Native 1280x720 (CONFIG_QUAKE_NATIVE_1280x720, off by default)
+- Quake renders 1280x720 directly (MAXWIDTH/MAXHEIGHT 1280/720, no bands: wider than
+  BAND_WIDTH); to fit PSRAM the hunk is 10 MB and the surface cache the stock size (3.1 MB).
+- **10.13 fps** (102 frames / 10.07 s); palette conversion 21.76 ms per frame; PSRAM free 142 KB.
+  Screenshot correct. Not practical.
+
+### 800x600 rendered natively, drawn for a 16:9 screen
+- QUAKEGENERIC_DISPLAY_ASPECT 16:9 (vid.aspect): the monitor stretches the 4:3 800x600 signal
+  (VESA, 40 MHz, AVI flagged 4:3) to 16:9, so Quake draws a wider view squeezed horizontally.
+  Only the 3D view is corrected; 2D (status bar, console) is drawn for square pixels.
+- MAXWIDTH/MAXHEIGHT 800/600, SRAM bands 800 wide (2 x 12.5 KB), surface cache 2x the formula
+  (3.6 MB) to fit PSRAM with the 16 MB hunk.
+- **38.28 fps** (383 frames / 10.00 s); palette conversion 10.47 ms per frame. Internal RAM free
+  36.0 KB, largest block 21.5 KB; PSRAM free 1.37 MB. Screenshot (stretched to 16:9) correct.
+- User's `timedemo demo1` on the same build (no profiling/diagnostics): **969 frames 25.4 s
+  38.2 fps**. Made the default (sdkconfig.defaults).

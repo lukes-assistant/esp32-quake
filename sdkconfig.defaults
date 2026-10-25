@@ -29,13 +29,14 @@ CONFIG_BSP_LCD_DPI_BUFFER_NUMS=2
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 
 # ESP32-P4-PC display: HDMI via the onboard LT8912B DSI-to-HDMI bridge, which needs RGB888.
-# 1280x720@60: Quake renders 512x288 (16:9) and the PPA scales it 2.5x; the display path
-# (palette convert + scale) caps it at ~32 fps. 640x480@60 (native, ~52 fps) is the fast mode
-# (CONFIG_BSP_LCD_HDMI_640x480_60HZ, see PERF_LOG.md).
+# 800x600@60: Quake renders 800x600 natively, drawn for a 16:9 screen (the monitor stretches
+# the signal; QUAKEGENERIC_DISPLAY_ASPECT), ~38 fps. Other modes (PERF_LOG.md): 640x480 native
+# (~52 fps, 4:3), 1280x720 (512x288 upscaled 2.5x, ~32 fps; CONFIG_QUAKE_NATIVE_1280x720 renders
+# it natively at ~10 fps).
 CONFIG_BSP_I2C_NUM=1
 CONFIG_BSP_I2C_FAST_MODE=y
 CONFIG_BSP_LCD_TYPE_HDMI=y
-CONFIG_BSP_LCD_HDMI_1280x720_60HZ=y
+CONFIG_BSP_LCD_HDMI_800x600_60HZ=y
 CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y
 
 # ESP32-P4 chip revision v1.0 on this board; IDF v5.5 defaults to rev >= v3.0

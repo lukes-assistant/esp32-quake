@@ -59,6 +59,15 @@ menu "Quake"
         depends on QUAKE_PROFILE
         default 262144
 
+    config QUAKE_NATIVE_1280x720
+        bool "Render 1280x720 natively (no upscaling)"
+        depends on BSP_LCD_HDMI_1280x720_60HZ
+        default n
+        help
+            With the 1280x720 HDMI mode, render the game at 1280x720 instead of 512x288 scaled
+            up 2.5x by the PPA. 3x the pixels of 640x480, so expect a low frame rate. To fit
+            PSRAM, the hunk shrinks to 10 MB and the surface cache to the stock size.
+
     config QUAKE_L2_AUTOLOAD
         bool "L2 cache hardware autoload on the surface cache and hunk (unsafe)"
         default n

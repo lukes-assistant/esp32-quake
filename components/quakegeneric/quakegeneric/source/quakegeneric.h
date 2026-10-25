@@ -38,6 +38,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define QUAKEGENERIC_RES_X 640
 #define QUAKEGENERIC_RES_Y 480
 #define QUAKEGENERIC_DISPLAY_ASPECT (4.0/3.0)
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+// 800x600 HDMI, rendered at the display resolution; the image is drawn for a 16:9 screen (the
+// monitor stretches the 4:3 signal), so the pixels are 4:3 wide (vid.aspect)
+#define QUAKEGENERIC_RES_X 800
+#define QUAKEGENERIC_RES_Y 600
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
+#elif CONFIG_QUAKE_NATIVE_1280x720
+// 1280x720 HDMI, rendered at the display resolution (no scaling)
+#define QUAKEGENERIC_RES_X 1280
+#define QUAKEGENERIC_RES_Y 720
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
 #else
 #define QUAKEGENERIC_RES_X 512
 #define QUAKEGENERIC_RES_Y 288 // 16:9; scales exactly 2.5x to 1280x720 HDMI

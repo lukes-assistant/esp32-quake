@@ -667,7 +667,11 @@ buffer were ~8% of the frame.
 ==============
 */
 #define BAND_ROWS	16
+#if CONFIG_BSP_LCD_HDMI_800x600_60HZ
+#define BAND_WIDTH	800
+#else
 #define BAND_WIDTH	640		// wider views draw straight into the frame buffer
+#endif
 
 qboolean	r_bandcopy;		// the DMA copy is available (vid_null.c)
 static byte	bandbuf[2][BAND_ROWS * BAND_WIDTH] __attribute__((aligned(128)));

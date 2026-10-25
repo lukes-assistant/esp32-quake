@@ -81,7 +81,13 @@ void	VID_Init (unsigned char *palette)
 
 	// 3x the usual size: span drawing is deferred to after all surfaces of a flush are
 	// cached (d_jobs.c), so a block must survive until the end of the flush
+#if CONFIG_QUAKE_NATIVE_1280x720
+	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT);	// (no room for 3x)
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT) * 2;	// (no room for 3x)
+#else
 	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT) * 3;
+#endif
 	surfcache = malloc(surfcache_size);
 	D_InitCaches (surfcache, surfcache_size);
 

@@ -17,7 +17,7 @@
 #include "quakegeneric.h"
 #include "esp_timer.h"
 
-#define MAX_COPY	(16*640)	// a band (r_edge.c)
+#define MAX_COPY	(16*800)	// a band (r_edge.c), up to 800 wide
 
 static dw_gdma_channel_handle_t dw_chan;
 static volatile uint32_t copies_done;

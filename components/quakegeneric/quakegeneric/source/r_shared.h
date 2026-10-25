@@ -29,8 +29,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define MAXWORKINGVERTS	(MAXVERTS+4)	// max points in an intermediate
 										//  polygon (while processing)
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
+#include "sdkconfig.h"
+#if CONFIG_QUAKE_NATIVE_1280x720
+#define	MAXHEIGHT		720
+#define	MAXWIDTH		1280
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+#define	MAXHEIGHT		600
+#define	MAXWIDTH		800
+#else
 #define	MAXHEIGHT		480
 #define	MAXWIDTH		640
+#endif
 #define MAXDIMENSION	((MAXHEIGHT > MAXWIDTH) ? MAXHEIGHT : MAXWIDTH)
 
 #define SIN_BUFFER_SIZE	(MAXDIMENSION+CYCLE)

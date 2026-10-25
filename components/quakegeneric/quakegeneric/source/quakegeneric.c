@@ -29,7 +29,11 @@ void QG_Create(int argc, char *argv[])
 {
 	static quakeparms_t    parms;
 
+#if CONFIG_QUAKE_NATIVE_1280x720
+	parms.memsize = 10*1024*1024;	// (native 1280x720: the frame/z buffers take the PSRAM)
+#else
 	parms.memsize = 16*1024*1024;	// (ESP32-P4 port: was 20 MB; PSRAM is also needed for the frame pipeline, r_pipe.c)
+#endif
 	parms.membase = malloc (parms.memsize);
 	parms.basedir = ".";
 
