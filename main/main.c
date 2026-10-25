@@ -117,7 +117,8 @@ void app_main() {
 
 	//The renderer's big edge/surface/span arrays are static (internal SRAM), so the
 	//stack is small and can live in internal SRAM too.
-	int stack_depth=32*1024;
+	//peak use ~9.7 KB (BENCH stack report, timedemo demo1 at 800x600)
+	int stack_depth=16*1024;
 
 	StaticTask_t *taskbuf=calloc(1, sizeof(StaticTask_t));
 	uint8_t *stackbuf=heap_caps_calloc(stack_depth, 1, MALLOC_CAP_INTERNAL);

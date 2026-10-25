@@ -33,7 +33,7 @@ extern drawsurf_t	r_drawsurf_c1;
 void R_DrawSurface_c1 (void);
 
 #define MAX_JOBS		1024
-#define MAX_BUILDS		256
+#define MAX_BUILDS		160		// peak 107 per frame (timedemo demo1 at 800x600)
 #define JOBS_CORE		1
 #define JOBS_PRIORITY	6	// above the display conversion task, below audio
 
@@ -65,6 +65,11 @@ static uint32_t	frame_gen;		// incremented per frame by core 0
 static uint32_t	done_gen;		// frame generation the worker has finished
 static int		worker_waiting;
 static qboolean	jobs_active;	// a frame is in progress (core 0 only)
+
+int		d_peak_jobs, d_peak_builds;	// per-frame peaks, for sizing (BENCH report)
+int		d_peak_demand;				// jobs + refused (queue full) in one frame
+int		d_frames_full, d_refused_total, d_stat_frames;
+static int	refused;					// this frame
 
 static TaskHandle_t		worker_task;
 static TaskHandle_t		frame_task;	// core 0's task, notified when the worker is done
@@ -442,10 +447,10 @@ void D_JobsBeginFrame (void)
 	{
 		// a static stack in internal SRAM: the heap could hand out slow memory (with little
 		// internal RAM left, a heap-allocated stack once landed in LP RAM: 2.6x slower)
-		static StackType_t	worker_stack[8192 / sizeof(StackType_t)];
+		static StackType_t	worker_stack[4096 / sizeof(StackType_t)];	// peak use ~2.4 KB
 		static StaticTask_t	worker_tcb;
 
-		worker_task = xTaskCreateStaticPinnedToCore (D_WorkerTask, "d_jobs", 8192, NULL,
+		worker_task = xTaskCreateStaticPinnedToCore (D_WorkerTask, "d_jobs", sizeof(worker_stack), NULL,
 				JOBS_PRIORITY, worker_stack, &worker_tcb, JOBS_CORE);
 	}
 	frame_task = xTaskGetCurrentTaskHandle ();
@@ -476,8 +481,13 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 {
 	job_t	*job;
 
-	if (!jobs_active || numjobs >= MAX_JOBS || (needbuild && numbuilds >= MAX_BUILDS))
+	if (!jobs_active)
 		return false;
+	if (numjobs >= MAX_JOBS || (needbuild && numbuilds >= MAX_BUILDS))
+	{
+		refused++;
+		return false;
+	}
 	job = &jobs[numjobs];
 	job->spans = spans;
 	job->ziorigin = ziorigin;
@@ -570,6 +580,19 @@ void D_JobsEndFrame (void)
 		return;
 	__atomic_store_n (&jobs_closed, 1, __ATOMIC_SEQ_CST);
 	D_WakeWorker ();
+	if (numjobs > d_peak_jobs)
+		d_peak_jobs = numjobs;
+	if (numbuilds > d_peak_builds)
+		d_peak_builds = numbuilds;
+	if (numjobs + refused > d_peak_demand)
+		d_peak_demand = numjobs + refused;
+	d_stat_frames++;
+	if (refused)
+	{
+		d_frames_full++;
+		d_refused_total += refused;
+	}
+	refused = 0;
 	D_RunJobs (0, gen);
 	while (__atomic_load_n (&done_gen, __ATOMIC_ACQUIRE) != gen)
 		ulTaskNotifyTake (pdTRUE, pdMS_TO_TICKS (10));

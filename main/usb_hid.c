@@ -297,7 +297,7 @@ void usb_hid_task(void)
 	*/
 	task_created = xTaskCreatePinnedToCore(usb_lib_task,
 										   "usb_events",
-										   4096,
+										   3072,	//peak use ~0.8 KB
 										   xTaskGetCurrentTaskHandle(),
 										   5, NULL, 0);
 	assert(task_created == pdTRUE);
@@ -313,7 +313,7 @@ void usb_hid_task(void)
 	const hid_host_driver_config_t hid_host_driver_config = {
 		.create_background_task = true,
 		.task_priority = 5,
-		.stack_size = 4096,
+		.stack_size = 3072,	//peak use ~0.5 KB
 		.core_id = 0,
 		.callback = hid_host_device_callback,
 		.callback_arg = NULL

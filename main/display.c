@@ -78,7 +78,7 @@ static int64_t start_time_fps_meas;
 static void screenshot_dump(const uint8_t *p) {
 	static int n=0;
 	static const char hex[]="0123456789abcdef";
-	char line[QUAKEGENERIC_RES_X*2+1];
+	static char line[QUAKEGENERIC_RES_X*2+1];	//not on the draw task's stack
 	printf("SHOT_BEGIN %d %d %d\n", n++, QUAKEGENERIC_RES_X, QUAKEGENERIC_RES_Y);
 	printf("SHOT_PAL ");
 	for (int i=0; i<256; i++) printf("%06lx", (unsigned long)pal888[i]);
@@ -406,7 +406,8 @@ void display_init() {
 	//no backlight on HDMI; the BSP's HDMI backlight pin (GPIO23) is UEXT I2C_SCL2 here
 
 	drawing_mux=xSemaphoreCreateMutex();
-	xTaskCreatePinnedToCore(draw_task, "draw", 4096, NULL, 8, &draw_task_handle, 1);
+	//peak use ~3.7 KB of the old 4 KB (BENCH stack report)
+	xTaskCreatePinnedToCore(draw_task, "draw", 5120, NULL, 8, &draw_task_handle, 1);
 }
 
 

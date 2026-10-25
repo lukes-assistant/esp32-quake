@@ -148,7 +148,7 @@ void QG_GetMouseMove(int *x, int *y) {
 
 
 void input_init() {
-	xTaskCreatePinnedToCore(usb_hid_task, "usbhid", 4096, NULL, 7, NULL, 1);
+	xTaskCreatePinnedToCore(usb_hid_task, "usbhid", 3072, NULL, 7, NULL, 1);	//peak use ~1.8 KB
 }
 
 

@@ -1237,3 +1237,21 @@ D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3
   36.0 KB, largest block 21.5 KB; PSRAM free 1.37 MB. Screenshot (stretched to 16:9) correct.
 - User's `timedemo demo1` on the same build (no profiling/diagnostics): **969 frames 25.4 s
   38.2 fps**. Made the default (sdkconfig.defaults).
+
+## 2026-10-25 — Internal RAM: stacks and build_ds shrunk to measured peaks (timedemo demo1, 800x600)
+- New BENCH lines: peak jobs/builds per frame (with demand and refusals when the queue is full)
+  and every task's unused stack (high-water marks since boot).
+- Measured: job queue **full** (1024 of 1024; demand peaks at 1493; full in 43 of 970 frames,
+  8127 jobs refused and drawn by core 0 itself). With 38 band flushes per frame at 800x600 every
+  surface gets a 72 B job per band. Not shrunk: as built it needs ~1500 slots. Splitting job_t
+  into a per-surface record (~64 B, once per frame) and a per-flush entry (~12 B) would fit the
+  demand in ~44 KB instead of today's 87 KB (jobs + jobdone + build_ds).
+- Builds peak at 107 per frame: MAX_BUILDS 256 -> 160.
+- Stacks (size -> measured use -> new size): quake 32 KB -> 9.7 -> 16 KB; d_jobs worker
+  8 KB -> 2.4 -> 4 KB; draw 4 KB -> 3.7 (280 B left!) -> 5 KB (screenshot line buffer made
+  static); audio 4 KB -> 1.8 -> 3 KB; usbhid, usb_events, USB HID Host 4 KB -> 0.5-1.8 -> 3 KB.
+  System/lwIP/Ethernet tasks unchanged.
+- Result: **38.26 fps** (unchanged), internal RAM free **36.2 -> 62.4 KB, largest block
+  21.5 -> 51.2 KB**. Margins after the change: quake 6.4 KB, d_jobs 1.6 KB, draw 1.3 KB,
+  audio 1.2 KB, usbhid 1.3 KB.
+

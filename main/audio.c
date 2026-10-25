@@ -96,7 +96,7 @@ qboolean SNDDMA_Init(void)
 	shm->buffer = (unsigned char *)dma_buffer;
 	snd_inited = 1;
 	Con_Printf("16 bit stereo sound initialized\n");
-	xTaskCreatePinnedToCore(audio_task, "audio", 4096, NULL, 7, NULL, 1);
+	xTaskCreatePinnedToCore(audio_task, "audio", 3072, NULL, 7, NULL, 1);	//peak use ~1.8 KB
 	return 1;
 }
 

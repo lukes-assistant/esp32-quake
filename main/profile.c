@@ -172,6 +172,21 @@ static void window_end(const char *what, int frames, float seconds) {
 		printf("BENCH game (core 0) waited for display: %.2f ms per frame\n",
 				drawframe_wait_us/1000.0/wait_frames);
 	}
+	{	//peak job queue use (d_jobs.c) and every task's unused stack (high-water marks since boot)
+		extern int d_peak_jobs, d_peak_builds, d_peak_demand, d_frames_full, d_refused_total, d_stat_frames;
+		static const char *names[]={"quake", "d_jobs", "draw", "audio", "cdaudio", "usbhid", "USB HID Host",
+			"usb_events", "tiT", "emac_rx", "sys_evt", "esp_timer", "Tmr Svc", "ipc0", "ipc1", "IDLE0", "IDLE1"};
+		char line[512];
+		int n=0;
+		printf("BENCH peak jobs %d (demand %d), peak builds %d per frame; queue full in %d of %d frames, %d jobs refused\n",
+				d_peak_jobs, d_peak_demand, d_peak_builds, d_frames_full, d_stat_frames, d_refused_total);
+		for (int i=0; i<sizeof(names)/sizeof(names[0]); i++) {
+			TaskHandle_t t=xTaskGetHandle(names[i]);
+			if (t && n<(int)sizeof(line)-40)
+				n+=snprintf(line+n, sizeof(line)-n, " %s=%lu", names[i], (unsigned long)uxTaskGetStackHighWaterMark(t));
+		}
+		printf("BENCH stack unused (bytes):%s\n", line);
+	}
 	TaskHandle_t quake_task=xTaskGetHandle("quake");
 	printf("BENCH peak edges %d, peak surfaces %d, quake stack unused %lu bytes\n",
 			r_peak_edges, r_peak_surfs,
