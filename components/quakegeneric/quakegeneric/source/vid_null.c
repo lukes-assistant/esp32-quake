@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakegeneric.h"
 #include "esp_heap_caps.h"
+#include "esp32p4/rom/cache.h"
 
 viddef_t	vid;				// global video state
 
@@ -82,6 +83,31 @@ void	VID_Init (unsigned char *palette)
 	surfcache_size = D_SurfaceCacheForRes(BASEWIDTH, BASEHEIGHT) * 3;
 	surfcache = malloc(surfcache_size);
 	D_InitCaches (surfcache, surfcache_size);
+
+	{
+		extern byte *hunk_base;
+		extern int hunk_size;
+		uint32_t sc_a0 = ((uint32_t)surfcache + 127u) & ~127u;
+		uint32_t sc_a1 = ((uint32_t)surfcache + (uint32_t)surfcache_size) & ~127u;
+		uint32_t hk_a0 = ((uint32_t)hunk_base + 127u) & ~127u;
+		uint32_t hk_a1 = ((uint32_t)hunk_base + (uint32_t)hunk_size) & ~127u;
+		struct l1_dcache_l2_autoload_config al_cfg = {
+			.order = CACHE_AUTOLOAD_POSITIVE,
+			.trigger = CACHE_AUTOLOAD_BOTH_TRIGGER,
+			.ena0 = 1,
+			.addr0 = sc_a0,
+			.size0 = sc_a1 - sc_a0,
+			.ena1 = 1,
+			.addr1 = hk_a0,
+			.size1 = hk_a1 - hk_a0,
+		};
+		Cache_Disable_L2_Cache_Autoload ();
+		Cache_Config_L2_Cache_Autoload (&al_cfg);
+		Cache_Enable_L2_Cache_Autoload ();
+		printf ("L2 autoload enabled on surfcache (0x%08lx..0x%08lx, %lu KB) + hunk (0x%08lx..0x%08lx, %lu KB)\n",
+				(unsigned long)sc_a0, (unsigned long)sc_a1, (unsigned long)((sc_a1 - sc_a0) / 1024),
+				(unsigned long)hk_a0, (unsigned long)hk_a1, (unsigned long)((hk_a1 - hk_a0) / 1024));
+	}
 
 	{
 		extern qboolean	r_bandcopy;

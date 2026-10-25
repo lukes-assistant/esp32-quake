@@ -972,3 +972,46 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
 - MEMORY_AND_COMPUTE_BUDGET.md: chip/memory hierarchy (datasheet and measured), where all
   memory is allocated, PSRAM traffic budget, per-code-area time per frame on both cores.
 
+## 2026-10-25 — Expanded memory/cache/DMA benchmark, DW-GDMA band copy, and scoped L2 autoload
+
+### Expanded hardware benchmark (main/membench.c, commit 8bbc7f2)
+- Fixed TCM write/copy cache-flush artifact (TCM wr128 is 4,571 MB/s, cp128 is 3,023 MB/s) and
+  chunked manual L2 preload (`Cache_Start_L2_Cache_Preload` size field is 16-bit, `<= 32 KB` per
+  call: 357 MB/s preload, 1,756 MB/s subsequent L2 hit; overlapped L2 preload + CPU 2x rd128
+  raises streaming throughput from 208 to 285 MB/s).
+- Benchmarked all 4 DMA architectures on ESP32-P4:
+  - AHB-GDMA: 86 MB/s SRAM->PSRAM.
+  - AXI-GDMA: 172 MB/s (32 KB) / 154 MB/s (10 KB band) SRAM->PSRAM.
+  - DW-GDMA (`DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS`, `width = 64-bit`, `burst_items = 64`,
+    `out_req = 4..16`): **557 MB/s** SRAM->PSRAM (544 MB/s with HDMI active), **337 MB/s**
+    PSRAM->SRAM, **228 MB/s** PSRAM->PSRAM (456 MB/s combined read+write), and **616 MB/s**
+    hardware fixed-source fill (`memset`) to PSRAM (**77% of the 800 MB/s Xccela PSRAM peak**).
+  - 2D-DMA + PPA: `ppa_do_fill` reaches **602 MB/s** (ARGB8888) / **523 MB/s** (RGB888) to PSRAM
+    with `PPA_DATA_BURST_LENGTH_128`.
+- L2 hardware autoload (`trigger = miss+hit`, `order = asc/desc`) raises single-core sequential
+  PSRAM `rd128` from 218 to **284 MB/s (+30%)** and `rd32` from 187 to **284 MB/s (+52%)**.
+
+### Experiment: DW-GDMA contiguous block mode in main/bandcopy.c (replaces AXI-GDMA)
+- Replaced the AXI-GDMA TX+RX channel pair and descriptor link lists in `main/bandcopy.c` with a
+  single DW-GDMA channel in contiguous block mode (`DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS`,
+  `width = DW_GDMA_TRANS_WIDTH_64`, `burst_items = DW_GDMA_BURST_ITEMS_64`, `burst_len = 16`,
+  `num_outstanding_requests = 8`).
+- Each 10 KB band copy now runs at ~544 MB/s (~18.8 us on the PSRAM bus vs ~66 us with AXI-GDMA),
+  leaving the MSPI PSRAM bus free for CPU cache misses sooner, and frees 2,072 bytes of internal
+  SRAM (free internal RAM 105.6 -> 107.7 KB, largest block 53.2 -> 55.3 KB).
+- **50.38 fps (+0.8% vs 49.98)** (504 frames / 10.00 s). Kept.
+
+### Experiment: Scoped L2 hardware autoload (`trigger = miss+hit`) on `surfcache` and `hunk`
+- Earlier autoload failures were caused by enabling autoload over DMA-written buffers (frame
+  buffers written by band DMA, or hunk memory being written by SD card DMA during `fread`) or
+  unaligned region edges overlapping adjacent allocations.
+- Configured L2 hardware autoload (`CACHE_AUTOLOAD_BOTH_TRIGGER`, `CACHE_AUTOLOAD_POSITIVE`) with
+  strictly inward-rounded 128-byte cache-line bounds (`(start + 127) & ~127` to `end & ~127`):
+  - Region 0 (`ena0 = 1`) on `surfcache` (`3,937 KB`, pure CPU read/write): **51.04 fps (+2.1%
+    vs 49.98 baseline, +1.3% vs 50.38 DW-GDMA)** (511 frames / 10.01 s).
+  - Region 0 (`surfcache`) + Region 1 (`ena1 = 1`, `16 MB` `hunk_base`), with
+    `Cache_Suspend_L2_Cache_Autoload` / `Cache_Resume_L2_Cache_Autoload` wrapping `fread` in
+    `Sys_FileRead` (`sys_null.c`) so SDMMC DMA never races with L2 prefetch: **51.16 fps (+2.4%
+    vs 49.98 baseline)** (512 frames / 10.01 s). Kept.
+
+

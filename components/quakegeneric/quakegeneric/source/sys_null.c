@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "errno.h"
 #include <sys/stat.h>
 #include <sys/time.h>
+#include "esp32p4/rom/cache.h"
 
 qboolean isDedicated;
 
@@ -113,7 +114,10 @@ void Sys_FileSeek (int handle, int position)
 
 int Sys_FileRead (int handle, void *dest, int count)
 {
-	return fread (dest, 1, count, sys_handles[handle]);
+	uint32_t al = Cache_Suspend_L2_Cache_Autoload ();
+	int r = fread (dest, 1, count, sys_handles[handle]);
+	Cache_Resume_L2_Cache_Autoload (al);
+	return r;
 }
 
 int Sys_FileWrite (int handle, void *data, int count)
