@@ -1,16 +1,24 @@
 /*
-d_jobs.c -- share world span drawing with the second core (ESP32-P4 port)
+d_jobs.c -- share world surface drawing with the second core (ESP32-P4 port)
 
-In each D_DrawSurfaces flush, core 0 walks the surfaces as before: it builds the surface
-caches and texture gradients, but instead of drawing the spans of normal textured surfaces
-it snapshots the gradients into a "colour job" and publishes it. A worker task on core 1
-first fills the z-buffer for every surface ("z jobs", queued before the walk starts), then
-draws colour jobs as soon as they are published. When core 0 has walked all surfaces it
-closes the queue and helps draw the remaining colour jobs.
+While R_ScanEdges scans a frame, each span flush (D_DrawSurfaces) turns every surface with
+spans into a job instead of drawing it:
+- normal textured surfaces: build the surface-cache block if needed (r_drawsurf setup
+  captured by D_CacheSurfaceDeferred), draw the textured spans, fill the z-buffer;
+- sky, water and background surfaces are drawn by core 0 during the walk; their job only
+  fills the z-buffer.
+The gradients each job needs are captured when it is queued, so jobs are independent and
+can run on either core in any order. Each core builds surface-cache blocks with its own copy
+of the surface code (r_surf_c1.c is a renamed copy of r_surf.c for core 1).
 
-D_JobsFinish waits for core 1 before the span lists are reused. The job versions of
-D_DrawZSpans and D_DrawSpans8 do the same arithmetic as the originals, with the gradients
-passed in instead of read from globals.
+Jobs are published to a queue that lasts the whole frame. A worker task on core 1 runs them
+as they are published and sleeps when there is nothing to do. R_ScanEdges alternates between
+two span buffers, so core 0 keeps scanning while the jobs of the previous flush run; before
+reusing a span buffer it waits (running jobs itself meanwhile) for the jobs that use it.
+D_JobsEndFrame runs/waits for everything, since the entity pass needs the complete z-buffer.
+
+The job versions of D_DrawZSpans and D_DrawSpans8 do the same arithmetic as the originals,
+with the gradients passed in instead of read from globals.
 */
 
 #include "quakedef.h"
@@ -19,45 +27,47 @@ passed in instead of read from globals.
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define MAX_ZJOBS		1024
-#define MAX_COLORJOBS	1024
+extern drawsurf_t	r_drawsurf_c1;
+void R_DrawSurface_c1 (void);
+
+#define MAX_JOBS		2048
 #define JOBS_CORE		1
 #define JOBS_PRIORITY	6	// above the display conversion task, below audio
 
 typedef struct
 {
-	espan_t	*spans;
-	float	ziorigin, zistepu, zistepv;
-} zjob_t;
-
-typedef struct
-{
 	espan_t		*spans;
+	float		ziorigin, zistepu, zistepv;
+	qboolean	color;		// draw textured spans (else z only)
+	qboolean	needbuild;	// build the surface-cache block first, using ds
 	pixel_t		*cacheblock;
 	int			cachewidth;
 	float		sdivzorigin, sdivzstepu, sdivzstepv;
 	float		tdivzorigin, tdivzstepu, tdivzstepv;
-	float		ziorigin, zistepu, zistepv;
 	fixed16_t	sadjust, tadjust, bbextents, bbextentt;
-} colorjob_t;
+	drawsurf_t	ds;
+} job_t;
 
-static zjob_t							zjobs[MAX_ZJOBS];
-static int								numzjobs;
-static EXT_RAM_BSS_ATTR colorjob_t		colorjobs[MAX_COLORJOBS];
-static int								numcolorjobs;	// published, written by core 0 only
-static int								nextcolorjob;	// claimed atomically by both cores
-static int								colorjobs_closed;	// core 0 has published all jobs
+static EXT_RAM_BSS_ATTR job_t	jobs[MAX_JOBS];
+static uint32_t					jobdone[MAX_JOBS];	// = frame generation when finished
 
-static TaskHandle_t		jobs_task;
-static TaskHandle_t		jobs_waiter;
-static qboolean			jobs_started;	// only touched by the queueing task
+static int		numjobs;		// published; written by core 0 only
+static int		nextjob;		// claimed by either core
+static int		jobs_closed;	// core 0 has published the frame's last job
+static uint32_t	frame_gen;		// incremented per frame by core 0
+static uint32_t	done_gen;		// frame generation the worker has finished
+static int		worker_waiting;
+static qboolean	jobs_active;	// a frame is in progress (core 0 only)
+
+static TaskHandle_t		worker_task;
+static TaskHandle_t		frame_task;	// core 0's task, notified when the worker is done
 
 /*
 D_DrawZSpansJob
 
 D_DrawZSpans with the gradients passed in.
 */
-static void D_DrawZSpansJob (const zjob_t *job)
+static void D_DrawZSpansJob (const job_t *job)
 {
 	espan_t			*pspan = job->spans;
 	int				count, doublecount, izistep;
@@ -112,7 +122,7 @@ D_DrawSpans8Job
 
 D_DrawSpans8 with the gradients passed in.
 */
-static void D_DrawSpans8Job (const colorjob_t *job)
+static void D_DrawSpans8Job (const job_t *job)
 {
 	espan_t			*pspan = job->spans;
 	int				count, spancount;
@@ -244,122 +254,220 @@ static void D_DrawSpans8Job (const colorjob_t *job)
 	} while ((pspan = pspan->pnext) != NULL);
 }
 
-static void D_DrawColorJobs (void)
+static void D_RunJob (job_t *job, int core)
 {
-	int		i;
-
-	for (;;)
+	if (job->needbuild)
 	{
-		i = __atomic_fetch_add (&nextcolorjob, 1, __ATOMIC_ACQ_REL);
-	// wait until job i is published, or the queue is closed without it
-		while (i >= __atomic_load_n (&numcolorjobs, __ATOMIC_ACQUIRE))
+		if (core)
 		{
-			if (__atomic_load_n (&colorjobs_closed, __ATOMIC_ACQUIRE) &&
-				i >= __atomic_load_n (&numcolorjobs, __ATOMIC_ACQUIRE))
-				return;
+			r_drawsurf_c1 = job->ds;
+			R_DrawSurface_c1 ();
 		}
-		D_DrawSpans8Job (&colorjobs[i]);
+		else
+		{
+			r_drawsurf = job->ds;
+			R_DrawSurface ();
+		}
 	}
-}
-
-static void D_JobsTask (void *arg)
-{
-	int		i;
-
-	for (;;)
-	{
-		ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time
-		for (i = 0 ; i < numzjobs ; i++)
-			D_DrawZSpansJob (&zjobs[i]);
-		D_DrawColorJobs ();
-
-		xTaskNotifyGive (jobs_waiter);	// exactly once per D_JobsStart
-	}
+	if (job->color)
+		D_DrawSpans8Job (job);
+	D_DrawZSpansJob (job);
 }
 
 /*
-D_ZJobAdd
+D_WorkerSleepUnless
 
-Queue the z fill of one surface's spans. Returns false if the queue is full, in which case
-the caller draws the z spans itself.
+Core 1 sleeps until core 0 publishes jobs, closes the queue or starts a frame. worker_waiting
+is set before the condition is checked one last time, so anything core 0 does after that
+check sends a notification (no lost wakeups); stale notifications only cause an extra check
+by the caller.
 */
-qboolean D_ZJobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv)
+static void D_WorkerSleepUnless (qboolean (*ready) (void *), void *arg)
 {
-	zjob_t	*job;
+	__atomic_store_n (&worker_waiting, 1, __ATOMIC_SEQ_CST);
+	if (!ready (arg))
+		ulTaskNotifyTake (pdTRUE, portMAX_DELAY);
+	__atomic_store_n (&worker_waiting, 0, __ATOMIC_RELEASE);
+}
 
-	if (numzjobs >= MAX_ZJOBS)
+static void D_WakeWorker (void)
+{
+	if (__atomic_load_n (&worker_waiting, __ATOMIC_SEQ_CST))
+		xTaskNotifyGive (worker_task);
+}
+
+static qboolean D_JobPublishedOrClosed (void *arg)
+{
+	int		i = *(int *)arg;
+
+	return i < __atomic_load_n (&numjobs, __ATOMIC_SEQ_CST) ||
+		__atomic_load_n (&jobs_closed, __ATOMIC_SEQ_CST);
+}
+
+static qboolean D_NewFrame (void *arg)
+{
+	return __atomic_load_n (&frame_gen, __ATOMIC_SEQ_CST) != *(uint32_t *)arg;
+}
+
+/*
+D_RunJobs
+
+Claim and run jobs of the current frame until the queue is closed and every job has been
+claimed. Core 1 sleeps while it waits for a claimed job to be published; core 0 spins (it
+only waits after closing the queue, i.e. never for long).
+*/
+static void D_RunJobs (int core, uint32_t gen)
+{
+	int		i;
+
+	for (;;)
+	{
+		i = __atomic_fetch_add (&nextjob, 1, __ATOMIC_ACQ_REL);
+		while (i >= __atomic_load_n (&numjobs, __ATOMIC_ACQUIRE))
+		{
+			if (__atomic_load_n (&jobs_closed, __ATOMIC_ACQUIRE) &&
+				i >= __atomic_load_n (&numjobs, __ATOMIC_ACQUIRE))
+				return;
+			if (core)
+				D_WorkerSleepUnless (D_JobPublishedOrClosed, &i);
+		}
+		D_RunJob (&jobs[i], core);
+		__atomic_store_n (&jobdone[i], gen, __ATOMIC_RELEASE);
+	}
+}
+
+static void D_WorkerTask (void *arg)
+{
+	uint32_t	my_gen = 0;
+
+	for (;;)
+	{
+		while (!D_NewFrame (&my_gen))
+			D_WorkerSleepUnless (D_NewFrame, &my_gen);
+		my_gen = __atomic_load_n (&frame_gen, __ATOMIC_ACQUIRE);
+
+		D_RunJobs (1, my_gen);
+
+		__atomic_store_n (&done_gen, my_gen, __ATOMIC_RELEASE);
+		xTaskNotifyGive (frame_task);
+	}
+}
+
+void D_JobsBeginFrame (void)
+{
+	if (!worker_task)
+		xTaskCreatePinnedToCore (D_WorkerTask, "d_jobs", 4096, NULL, JOBS_PRIORITY, &worker_task, JOBS_CORE);
+	frame_task = xTaskGetCurrentTaskHandle ();
+	numjobs = 0;
+	nextjob = 0;
+	jobs_closed = 0;
+	jobs_active = true;
+	__atomic_add_fetch (&frame_gen, 1, __ATOMIC_SEQ_CST);
+	D_WakeWorker ();
+}
+
+int D_JobsCount (void)
+{
+	return numjobs;
+}
+
+/*
+D_JobAdd
+
+Queue a surface: z fill always; if color, also the textured spans with the gradients that
+D_CalcGradients/D_DrawSurfaces have just set up, building the surface-cache block described
+by *ds first if needbuild. Returns false if no frame is active or the queue is full, in
+which case the caller draws the surface itself.
+*/
+qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
+		qboolean color, qboolean needbuild, const drawsurf_t *ds)
+{
+	job_t	*job;
+
+	if (!jobs_active || numjobs >= MAX_JOBS)
 		return false;
-	job = &zjobs[numzjobs++];
+	job = &jobs[numjobs];
 	job->spans = spans;
 	job->ziorigin = ziorigin;
 	job->zistepu = zistepu;
 	job->zistepv = zistepv;
+	job->color = color;
+	job->needbuild = needbuild;
+	if (color)
+	{
+		job->cacheblock = cacheblock;
+		job->cachewidth = cachewidth;
+		job->sdivzorigin = d_sdivzorigin;
+		job->sdivzstepu = d_sdivzstepu;
+		job->sdivzstepv = d_sdivzstepv;
+		job->tdivzorigin = d_tdivzorigin;
+		job->tdivzstepu = d_tdivzstepu;
+		job->tdivzstepv = d_tdivzstepv;
+		job->sadjust = sadjust;
+		job->tadjust = tadjust;
+		job->bbextents = bbextents;
+		job->bbextentt = bbextentt;
+	}
+	if (needbuild)
+		job->ds = *ds;
+	__atomic_store_n (&numjobs, numjobs + 1, __ATOMIC_SEQ_CST);	// publish
 	return true;
 }
 
 /*
-D_ColorJobAdd
+D_JobsPublished
 
-Queue the textured spans of the current surface, using the gradients that D_CalcGradients
-and D_DrawSurfaces have just set up. Returns false if the queue is full, in which case the
-caller draws the spans itself.
+Called after a flush has queued its jobs: wake core 1 if it's asleep.
 */
-qboolean D_ColorJobAdd (espan_t *spans)
+void D_JobsPublished (void)
 {
-	colorjob_t	*job;
-
-	if (!jobs_started || numcolorjobs >= MAX_COLORJOBS)
-		return false;
-	job = &colorjobs[numcolorjobs];
-	job->spans = spans;
-	job->cacheblock = cacheblock;
-	job->cachewidth = cachewidth;
-	job->sdivzorigin = d_sdivzorigin;
-	job->sdivzstepu = d_sdivzstepu;
-	job->sdivzstepv = d_sdivzstepv;
-	job->tdivzorigin = d_tdivzorigin;
-	job->tdivzstepu = d_tdivzstepu;
-	job->tdivzstepv = d_tdivzstepv;
-	job->ziorigin = d_ziorigin;
-	job->zistepu = d_zistepu;
-	job->zistepv = d_zistepv;
-	job->sadjust = sadjust;
-	job->tadjust = tadjust;
-	job->bbextents = bbextents;
-	job->bbextentt = bbextentt;
-	__atomic_store_n (&numcolorjobs, numcolorjobs + 1, __ATOMIC_RELEASE);	// publish
-	return true;
+	if (jobs_active)
+		D_WakeWorker ();
 }
 
 /*
-D_JobsStart
+D_JobsWaitRange
 
-Start phase 1: core 1 fills the z-buffer for the queued z jobs.
+Wait until jobs [first, last) of this frame are finished, running jobs meanwhile.
 */
-void D_JobsStart (void)
+void D_JobsWaitRange (int first, int last)
 {
-	if (!jobs_task)
-		xTaskCreatePinnedToCore (D_JobsTask, "d_jobs", 4096, NULL, JOBS_PRIORITY, &jobs_task, JOBS_CORE);
-	numcolorjobs = 0;
-	nextcolorjob = 0;
-	colorjobs_closed = 0;
-	jobs_waiter = xTaskGetCurrentTaskHandle ();
-	jobs_started = true;
-	xTaskNotifyGive (jobs_task);
+	uint32_t	gen = frame_gen;
+	int			j, i;
+
+	for (j = first ; j < last ; j++)
+	{
+		while (__atomic_load_n (&jobdone[j], __ATOMIC_ACQUIRE) != gen)
+		{
+		// help: run an unclaimed published job, if any
+			i = __atomic_load_n (&nextjob, __ATOMIC_ACQUIRE);
+			if (i < __atomic_load_n (&numjobs, __ATOMIC_ACQUIRE) &&
+				__atomic_compare_exchange_n (&nextjob, &i, i + 1, false,
+					__ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+			{
+				D_RunJob (&jobs[i], 0);
+				__atomic_store_n (&jobdone[i], gen, __ATOMIC_RELEASE);
+			}
+		}
+	}
 }
 
 /*
-D_JobsFinish
+D_JobsEndFrame
 
-Close the colour job queue, help draw the remaining jobs, then wait for core 1.
+Close the queue, run the remaining jobs and wait for core 1, so the z-buffer and the
+framebuffer are complete.
 */
-void D_JobsFinish (void)
+void D_JobsEndFrame (void)
 {
-	if (!jobs_started)
+	uint32_t	gen = frame_gen;
+
+	if (!jobs_active)
 		return;
-	__atomic_store_n (&colorjobs_closed, 1, __ATOMIC_RELEASE);
-	D_DrawColorJobs ();
-	ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time: two can be pending
-	jobs_started = false;
-	numzjobs = 0;
+	__atomic_store_n (&jobs_closed, 1, __ATOMIC_SEQ_CST);
+	D_WakeWorker ();
+	D_RunJobs (0, gen);
+	while (__atomic_load_n (&done_gen, __ATOMIC_ACQUIRE) != gen)
+		ulTaskNotifyTake (pdTRUE, pdMS_TO_TICKS (10));
+	jobs_active = false;
 }

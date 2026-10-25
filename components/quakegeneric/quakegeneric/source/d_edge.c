@@ -178,6 +178,8 @@ void D_DrawSurfaces (void)
 	surfcache_t		*pcurrentcache;
 	vec3_t			world_transformed_modelorg;
 	vec3_t			local_modelorg;
+	qboolean		needbuild;
+	drawsurf_t		ds;
 
 	currententity = &cl_entities[0];
 	TransformVector (modelorg, transformed_modelorg);
@@ -201,18 +203,8 @@ void D_DrawSurfaces (void)
 	}
 	else
 	{
-	// queue the z-buffer fill for the other core; textured spans are queued as colour jobs
-	// that both cores draw in D_JobsFinish
-		for (s = &surfaces[1] ; s<surface_p ; s++)
-		{
-			if (!s->spans)
-				continue;
-			s->zqueued = (s->flags & SURF_DRAWBACKGROUND) ?
-					D_ZJobAdd (s->spans, -0.9, 0, 0) :
-					D_ZJobAdd (s->spans, s->d_ziorigin, s->d_zistepu, s->d_zistepv);
-		}
-		D_JobsStart ();
-
+	// surfaces become jobs that either core runs (d_jobs.c); sky, water and background are
+	// drawn here and only their z fill is queued
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
 			if (!s->spans)
@@ -232,7 +224,7 @@ void D_DrawSurfaces (void)
 				}
 
 				D_DrawSkyScans8 (s->spans);
-				if (!s->zqueued)
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWBACKGROUND)
@@ -244,7 +236,7 @@ void D_DrawSurfaces (void)
 				d_ziorigin = -0.9;
 
 				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				if (!s->zqueued)
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWTURB)
@@ -272,7 +264,7 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 				Turbulent8 (s->spans);
-				if (!s->zqueued)
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
 					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
@@ -311,19 +303,25 @@ void D_DrawSurfaces (void)
 				miplevel = D_MipLevelForScale (s->nearzi * scale_for_mip
 				* pface->texinfo->mipadjust);
 
-			// FIXME: make this passed in to D_CacheSurface
-				pcurrentcache = D_CacheSurface (pface, miplevel);
+			// the surface-cache block is drawn on core 1 (d_jobs.c) unless the queue is full
+				pcurrentcache = D_CacheSurfaceDeferred (pface, miplevel, &needbuild, &ds);
 
 				cacheblock = (pixel_t *)pcurrentcache->data;
 				cachewidth = pcurrentcache->width;
 
 				D_CalcGradients (pface);
 
-				if (d_drawspans != D_DrawSpans8 || !D_ColorJobAdd (s->spans))
+				if (d_drawspans != D_DrawSpans8 ||
+					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds))
+				{
+					if (needbuild)
+					{
+						r_drawsurf = ds;
+						R_DrawSurface ();
+					}
 					(*d_drawspans) (s->spans);
-
-				if (!s->zqueued)
 					D_DrawZSpans (s->spans);
+				}
 
 				if (s->insubmodel)
 				{
@@ -343,7 +341,7 @@ void D_DrawSurfaces (void)
 				}
 			}
 		}
-		D_JobsFinish ();
+		D_JobsPublished ();
 	}
 }
 

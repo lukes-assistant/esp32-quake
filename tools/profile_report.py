@@ -17,17 +17,17 @@ import subprocess
 import sys
 
 
-def read_log(path):
+def read_log(path, tag='PROF'):
     bench, samples, hz = [], None, None
     with open(path, 'rb') as f:
         for raw in f:
             line = re.sub(r'\x1b\[[0-9;]*m', '', raw.decode('utf-8', 'replace')).strip()
             if line.startswith('BENCH '):
                 bench.append(line)
-            elif line.startswith('PROF_BEGIN'):
+            elif line.startswith(tag + '_BEGIN'):
                 hz = int(line.split()[2])
                 samples = collections.Counter()
-            elif line.startswith('PROF ') and samples is not None:
+            elif line.startswith(tag + ' ') and samples is not None:
                 _, pc, count = line.split()
                 samples[int(pc, 16)] += int(count)
     return bench, samples, hz
@@ -51,9 +51,11 @@ def main():
     ap.add_argument('elf', nargs='?', default='build/quake.elf')
     ap.add_argument('--top', type=int, default=30)
     ap.add_argument('--lines', action='store_true', help='also show the hottest source lines')
+    ap.add_argument('--core', type=int, default=0, choices=(0, 1),
+                    help='which core\'s samples to report (core 1 needs CONFIG_QUAKE_PROFILE_CORE1)')
     args = ap.parse_args()
 
-    bench, samples, hz = read_log(args.log)
+    bench, samples, hz = read_log(args.log, 'PROF' if args.core == 0 else 'PROF1')
     for b in bench:
         print(b)
     if not samples:
@@ -70,7 +72,7 @@ def main():
         else:
             funcs['?? %08x' % pc] += n
 
-    print(f'\n{total} samples at {hz} Hz ({total / hz:.1f} s) on core 0\n')
+    print(f'\n{total} samples at {hz} Hz ({total / hz:.1f} s) on core {args.core}\n')
     print(f'{"%":>6} {"cum%":>6} {"samples":>8}  function')
     cum = 0
     for name, n in funcs.most_common(args.top):

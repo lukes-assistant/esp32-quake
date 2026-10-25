@@ -258,6 +258,74 @@ int D_log2 (int num)
 
 /*
 ================
+D_CacheSurfaceDeferred
+
+D_CacheSurface without the drawing (ESP32-P4 port, see d_jobs.c): finds or allocates the
+cache block and returns it. If the block needs (re)drawing, *needbuild is set and *ds holds
+the r_drawsurf setup for R_DrawSurface, which the caller runs later (on the other core).
+Doesn't touch the global r_drawsurf, which the other core uses while building.
+================
+*/
+surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds)
+{
+	surfcache_t     *cache;
+
+	ds->texture = R_TextureAnimation (surface->texinfo->texture);
+	ds->lightadj[0] = d_lightstylevalue[surface->styles[0]];
+	ds->lightadj[1] = d_lightstylevalue[surface->styles[1]];
+	ds->lightadj[2] = d_lightstylevalue[surface->styles[2]];
+	ds->lightadj[3] = d_lightstylevalue[surface->styles[3]];
+
+	cache = surface->cachespots[miplevel];
+
+	if (cache && !cache->dlight && surface->dlightframe != r_framecount
+			&& cache->texture == ds->texture
+			&& cache->lightadj[0] == ds->lightadj[0]
+			&& cache->lightadj[1] == ds->lightadj[1]
+			&& cache->lightadj[2] == ds->lightadj[2]
+			&& cache->lightadj[3] == ds->lightadj[3] )
+	{
+		*needbuild = false;
+		return cache;
+	}
+
+	surfscale = 1.0 / (1<<miplevel);
+	ds->surfmip = miplevel;
+	ds->surfwidth = surface->extents[0] >> miplevel;
+	ds->rowbytes = ds->surfwidth;
+	ds->surfheight = surface->extents[1] >> miplevel;
+
+	if (!cache)     // if a texture just animated, don't reallocate it
+	{
+		cache = D_SCAlloc (ds->surfwidth,
+						   ds->surfwidth * ds->surfheight);
+		surface->cachespots[miplevel] = cache;
+		cache->owner = &surface->cachespots[miplevel];
+		cache->mipscale = surfscale;
+	}
+
+	if (surface->dlightframe == r_framecount)
+		cache->dlight = 1;
+	else
+		cache->dlight = 0;
+
+	ds->surfdat = (pixel_t *)cache->data;
+
+	cache->texture = ds->texture;
+	cache->lightadj[0] = ds->lightadj[0];
+	cache->lightadj[1] = ds->lightadj[1];
+	cache->lightadj[2] = ds->lightadj[2];
+	cache->lightadj[3] = ds->lightadj[3];
+
+	ds->surf = surface;
+
+	c_surf++;
+	*needbuild = true;
+	return cache;
+}
+
+/*
+================
 D_CacheSurface
 ================
 */

@@ -367,3 +367,42 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   Waiting for an unpublished job is a spin on an internal variable.
 - **27.14 fps (+2.6% vs 26.46)**. Kept.
 
+### Experiment: surface-cache building on core 1 only (D_CacheSurfaceDeferred + build jobs)
+- Core 0's walk only looks up/allocates the cache block and computes gradients; core 1
+  draws the block (R_DrawSurface) before marking the colour job ready.
+- **26.98 fps (vs 27.14: no gain)**: core 1 became the bottleneck (builds serialised there).
+
+### Experiment: surface building on both cores (r_surf_c1.c)
+- r_surf.c compiled a second time with every global/function renamed (_c1) gives core 1 an
+  independent R_DrawSurface; core 0 builds a block itself (with the original copy) when core
+  1 has >= 2 builds pending, and publishes that job as already built.
+- **27.67 fps (+2.0% vs 27.14)**. Kept. Need per-core utilisation to see the new balance.
+
+### Tool: core-1 PC sampling (CONFIG_QUAKE_PROFILE_CORE1)
+- A second gptimer ISR on core 0 samples core 1's PC (PROF1 lines; profile_report.py --core 1).
+- First attempt gave a garbage core-0 profile: both sampling ISRs ran at exactly 2 kHz, so
+  each always caught the other core inside its own sampling ISR. Fixed by giving the core-1
+  timer a period 37 us longer.
+- At 27.3 fps: core 1 idle ~42%, and spinning in the build loop while core 0 walked.
+
+### Experiment: core 1 does z first, then interleaves in-order builds with colour jobs
+- **26.28 fps (worse)**: core 0 saw a build backlog, built more itself, then spun 11% in
+  D_JobsFinish waiting for core 1's in-order builds. Replaced.
+
+### Experiment: independent jobs (build + draw, either core, any order)
+- Each colour job builds its block with the claiming core's own copy of the surface code,
+  then draws. No ordering. **27.60 fps** (profiling build); core 1 still idle 44%: every
+  flush was synchronous, so core 1 had nothing to do while core 0 scanned between flushes.
+
+### Experiment: pipelined job queue across the frame
+- One job queue per frame; every surface of every flush becomes a job (textured: build +
+  colour + z; sky/water/background: drawn by core 0, z-only job). R_ScanEdges alternates
+  between two span buffers and only waits (helping meanwhile) for the jobs of the flush that
+  last used the buffer it switches to; D_JobsEndFrame completes everything before the
+  entity pass. Core 1 sleeps when the queue is empty (lost-wakeup-safe notification; frame
+  generation counter so stale notifications can't start a frame), instead of spinning and
+  starving the display task.
+- **28.84 fps** (profiling build; +4.5% vs 27.60). Core 1: colour 32%, builds 13%, z 11%,
+  idle 39%. Core 0's remaining serial work (models, edges, game logic, HUD) is now what
+  leaves core 1 idle.
+

@@ -103,9 +103,13 @@ extern float	d_scalemip[3];
 
 extern void (*d_drawspans) (espan_t *pspan);
 
-// d_jobs.c: world z-buffer fill and span drawing shared with the second core
-qboolean D_ZJobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv);
-qboolean D_ColorJobAdd (espan_t *spans);
-void D_JobsStart (void);
-void D_JobsFinish (void);
+// d_jobs.c: world surface drawing shared with the second core
+void D_JobsBeginFrame (void);
+int D_JobsCount (void);
+qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
+		qboolean color, qboolean needbuild, const drawsurf_t *ds);
+void D_JobsPublished (void);
+void D_JobsWaitRange (int first, int last);
+void D_JobsEndFrame (void);
+surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds);
 

@@ -21,6 +21,14 @@ menu "Quake"
             end of the window, the sampled PCs are printed as "PROF <pc> <count>"
             lines; tools/profile_report.py maps them to functions.
 
+    config QUAKE_PROFILE_CORE1
+        bool "Also sample core 1 (from a timer interrupt on core 0)"
+        depends on QUAKE_PROFILE
+        default n
+        help
+            Costs core 0 a little time (about 0.2% at 2 kHz). Core 1 samples are printed
+            as "PROF1 <pc> <count>"; use tools/profile_report.py --core 1.
+
     config QUAKE_PROFILE_SAMPLE_HZ
         int "Sample rate (Hz)"
         depends on QUAKE_PROFILE

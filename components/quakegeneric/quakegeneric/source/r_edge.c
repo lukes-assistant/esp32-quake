@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "r_local.h"
+#include "d_local.h"	// D_Jobs*
 
 #if 0
 // FIXME
@@ -641,12 +642,20 @@ Each surface has a linked list of its visible spans
 void R_ScanEdges (void)
 {
 	int		iv, bottom;
-	static byte	basespans[MAXSPANS*sizeof(espan_t)+CACHE_SIZE];	// internal SRAM, not stack
+	// internal SRAM, not stack; two buffers so scanning continues while the previous
+	// flush's surfaces are drawn by the job queue (d_jobs.c)
+	static byte	basespans[2][MAXSPANS*sizeof(espan_t)+CACHE_SIZE];
+	static int	bufjobs[2][2];	// range of jobs that use each span buffer
+	int		curbuf, firstjob;
 	espan_t	*basespan_p;
 	surf_t	*s;
 
+	D_JobsBeginFrame ();
+	curbuf = 0;
+	bufjobs[0][0] = bufjobs[0][1] = bufjobs[1][0] = bufjobs[1][1] = 0;
+
 	basespan_p = (espan_t *)
-			((intptr_t)(basespans + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
+			((intptr_t)(basespans[curbuf] + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
 	max_span_p = &basespan_p[MAXSPANS - r_refdef.vrect.width];
 
 	span_p = basespan_p;
@@ -706,6 +715,7 @@ void R_ScanEdges (void)
 			S_ExtraUpdate ();	// don't let sound get messed up if going slow
 			VID_LockBuffer ();
 		
+			firstjob = D_JobsCount ();
 			if (r_drawculledpolys)
 			{
 				R_DrawCulledPolys ();
@@ -714,11 +724,19 @@ void R_ScanEdges (void)
 			{
 				D_DrawSurfaces ();
 			}
+			bufjobs[curbuf][0] = firstjob;
+			bufjobs[curbuf][1] = D_JobsCount ();
 
 		// clear the surface span pointers
 			for (s = &surfaces[1] ; s<surface_p ; s++)
 				s->spans = NULL;
 
+		// switch span buffers, once the jobs still using the other one are done
+			curbuf ^= 1;
+			D_JobsWaitRange (bufjobs[curbuf][0], bufjobs[curbuf][1]);
+			basespan_p = (espan_t *)
+					((intptr_t)(basespans[curbuf] + CACHE_SIZE - 1) & ~(CACHE_SIZE - 1));
+			max_span_p = &basespan_p[MAXSPANS - r_refdef.vrect.width];
 			span_p = basespan_p;
 		}
 
@@ -747,6 +765,9 @@ void R_ScanEdges (void)
 		R_DrawCulledPolys ();
 	else
 		D_DrawSurfaces ();
+
+// the entity pass needs the complete z-buffer
+	D_JobsEndFrame ();
 }
 
 
