@@ -45,6 +45,7 @@ typedef struct surfcache_s
 	unsigned			height;		// DEBUG only needed for debug
 	float				mipscale;
 	struct texture_s	*texture;	// checked for animating textures
+	int					usedframe;	// r_framecount when last used (d_jobs.c may still use it)
 	byte				data[4];	// width*height elements
 } surfcache_t;
 
@@ -115,5 +116,6 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 void D_JobsPublished (void);
 void D_JobsWaitRange (int first, int last);
 void D_JobsEndFrame (void);
+void D_JobsWaitAll (void);
 surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds);
 

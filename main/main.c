@@ -66,28 +66,8 @@ static void quake_task(void *param) {
 #define SD_PWR_EN_GPIO	45	//SD1_PWR_EN, P-MOS high-side switch, active low
 #define HUB_RST_GPIO	21	//HUB_RST# of the FE1.1s USB hub, active low
 
-//Turn on the L2 cache's hardware prefetch (autoload) for PSRAM; ESP-IDF leaves it off.
-//The renderer's PSRAM accesses are latency-bound, and prefetching the next lines on a
-//miss or hit is worth ~4.8% (see PERF_LOG.md). Prefetched lines are clean, so data that
-//DMA reads or writes (frame buffers, SD card) is unaffected: drivers still write back /
-//invalidate around their transfers. Enabling it in the L1 data cache too was slower.
-#include "esp32p4/rom/cache.h"
-#include "soc/soc.h"
-static void cache_autoload_init(void) {
-	const struct l1_dcache_l2_autoload_config cfg={
-		.gid=0,
-		.order=CACHE_AUTOLOAD_POSITIVE,
-		.trigger=CACHE_AUTOLOAD_BOTH_TRIGGER,
-		.ena0=1,
-		.addr0=SOC_EXTRAM_LOW,
-		.size0=SOC_EXTRAM_HIGH-SOC_EXTRAM_LOW,
-	};
-	Cache_Config_L2_Cache_Autoload(&cfg);
-	Cache_Enable_L2_Cache_Autoload();
-}
 
 static void board_init(void) {
-	cache_autoload_init();
 	gpio_config_t io={
 		.pin_bit_mask=(1ULL<<SD_PWR_EN_GPIO)|(1ULL<<HUB_RST_GPIO),
 		.mode=GPIO_MODE_OUTPUT,

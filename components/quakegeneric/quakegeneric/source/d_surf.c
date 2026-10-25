@@ -127,6 +127,20 @@ void D_FlushCaches (void)
 D_SCAlloc
 =================
 */
+/*
+D_SCAllocFreeing
+
+ESP32-P4 port: surface drawing is deferred to jobs that run until the end of the frame
+(d_jobs.c), so a block used earlier in this frame may still be read or rebuilt by a queued
+job. Before such a block is freed (and its memory reused, header included), wait for all
+queued jobs.
+*/
+static void D_SCAllocFreeing (surfcache_t *c)
+{
+	if (c->usedframe == r_framecount)
+		D_JobsWaitAll ();
+}
+
 surfcache_t     *D_SCAlloc (int width, int size)
 {
 	surfcache_t             *new;
@@ -158,7 +172,10 @@ surfcache_t     *D_SCAlloc (int width, int size)
 // colect and free surfcache_t blocks until the rover block is large enough
 	new = sc_rover;
 	if (sc_rover->owner)
+	{
+		D_SCAllocFreeing (sc_rover);
 		*sc_rover->owner = NULL;
+	}
 	
 	while (new->size < size)
 	{
@@ -167,7 +184,10 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		if (!sc_rover)
 			Sys_Error ("D_SCAlloc: hit the end of memory");
 		if (sc_rover->owner)
+		{
+			D_SCAllocFreeing (sc_rover);
 			*sc_rover->owner = NULL;
+		}
 			
 		new->size += sc_rover->size;
 		new->next = sc_rover->next;
@@ -289,6 +309,7 @@ surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean
 			&& cache->lightadj[2] == ds->lightadj[2]
 			&& cache->lightadj[3] == ds->lightadj[3] )
 	{
+		cache->usedframe = r_framecount;
 		*needbuild = false;
 		return cache;
 	}
@@ -322,6 +343,7 @@ surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean
 	cache->lightadj[3] = ds->lightadj[3];
 
 	ds->surf = surface;
+	cache->usedframe = r_framecount;
 
 	c_surf++;
 	d_stat_builds++;
@@ -407,5 +429,6 @@ surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
 
 	return surface->cachespots[miplevel];
 }
+
 
 

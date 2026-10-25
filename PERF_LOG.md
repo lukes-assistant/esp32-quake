@@ -541,3 +541,42 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 - Left/right split: **38.76 fps (+2.5%)**. Kept. Possible sub-pixel seam where models are
   clipped at the centre line (same clipping as at screen edges); not visible in the log.
 
+## 2026-10-25 — Stability: two concurrency bugs fixed, cache autoload removed
+
+The multi-core work had introduced crashes/hangs (the user saw a hang). Found with 4-minute
+runs through all three demos (diagnostic runs, not benchmarks) plus temporary debug code
+(frame-buffer guard zones, surface-cache list validation at phase checkpoints, and a hang
+reporter printing both cores' PCs, task states and job-queue state; all removed again).
+
+### Bug 1: surface-cache block freed while a queued job still used it (crash)
+- Repeated crash in D_SCAlloc (`*sc_rover->owner = NULL`, owner = 0x13020202: four 8-bit
+  pixels) in demo3. Guard zones after the frame/z buffers stayed intact; validating the
+  surface cache's block list showed the first damaged header right after the world pass.
+- Cause: a dynamically lit surface reuses its existing cache block and queues a rebuild job.
+  Later in the same frame core 0 allocates a block for another surface; if the allocator's
+  rover reaches that existing block, it frees it and writes a new block header into it; the
+  pending rebuild then writes texels over that header. (The original renderer built each
+  surface immediately, so blocks used earlier in a frame were never still in use.)
+- Fix: surfcache_t.usedframe is stamped when D_CacheSurfaceDeferred returns a block; before
+  D_SCAlloc frees a block used this frame, it waits (helping) for all queued jobs
+  (D_JobsWaitAll).
+
+### Bug 2: deadlock in D_JobsWaitRange (hang)
+- The first version of bug 1's fix hung after ~1 minute. The hang reporter showed the game
+  task runnable (spinning), the worker asleep, all published jobs claimed, queue open.
+- Cause: core 1 can claim a job index before core 0 publishes it and then sleep; core 0 only
+  wakes it at the end of a flush. Waiting for that job from inside the flush (the allocator
+  wait) spun forever. Fix: D_JobsWaitRange wakes the worker before waiting.
+
+### Cache autoload removed
+- With the two bugs fixed and autoload off: 4 minutes, all three demos, no faults.
+- Whole-PSRAM L2 autoload: crash within seconds after a level load (load fault in
+  R_DrawSurface). Likely prefetched lines of level data that the SD card's DMA was still
+  writing stay stale after the driver's invalidate. It was probably also behind the user's
+  original hang.
+- Autoload restricted to CPU-only buffers (surface cache, z/frame buffers): +~2%, but one
+  unexplained reboot in demo3; adding code/rodata/PSRAM .bss: Instruction access fault in
+  demo3. The ROM header says not to call these functions from applications; on this chip it
+  isn't safe. Removed entirely.
+- Clean build (fixes, no autoload, no debug code): **37.05 fps**, stable for 4 minutes.
+

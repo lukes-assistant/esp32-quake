@@ -488,6 +488,10 @@ void D_JobsWaitRange (int first, int last)
 	uint32_t	gen = frame_gen;
 	int			j, i;
 
+// core 1 may be asleep holding a claim on a job that was published after it went to sleep
+// (it is only woken at the end of a flush); wake it, or we could wait for that job forever
+	D_WakeWorker ();
+
 	for (j = first ; j < last ; j++)
 	{
 		while (__atomic_load_n (&jobdone[j], __ATOMIC_ACQUIRE) != gen)
@@ -524,3 +528,15 @@ void D_JobsEndFrame (void)
 		ulTaskNotifyTake (pdTRUE, pdMS_TO_TICKS (10));
 	jobs_active = false;
 }
+
+/*
+D_JobsWaitAll
+
+Wait (running jobs meanwhile) until every job published so far this frame has finished.
+*/
+void D_JobsWaitAll (void)
+{
+	if (jobs_active)
+		D_JobsWaitRange (0, numjobs);
+}
+
