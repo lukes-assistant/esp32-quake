@@ -145,22 +145,21 @@ static void D_DrawSpans8Job (const job_t *job)
 {
 	espan_t			*pspan = job->spans;
 	int				count, spancount;
-	unsigned char	*pbase, *pdest;
+	const unsigned char	* restrict pbase;
+	unsigned char	* restrict pdest;
 	fixed16_t		s, t, snext, tnext, sstep, tstep;
 	float			sdivz, tdivz, zi, z, du, dv, spancountminus1;
 	float			sdivz8stepu, tdivz8stepu, zi8stepu;
+	const float		k65536 = (float)0x10000;
 	const int		cachewidth = job->cachewidth;
 	const fixed16_t	sadjust = job->sadjust, tadjust = job->tadjust;
 	const fixed16_t	bbextents = job->bbextents, bbextentt = job->bbextentt;
 
-	sstep = 0;	// keep compiler happy
-	tstep = 0;	// ditto
+	pbase = (const unsigned char *)job->cacheblock;
 
-	pbase = (unsigned char *)job->cacheblock;
-
-	sdivz8stepu = job->sdivzstepu * 8;
-	tdivz8stepu = job->tdivzstepu * 8;
-	zi8stepu = job->zistepu * 8;
+	sdivz8stepu = job->sdivzstepu * 8.0f;
+	tdivz8stepu = job->tdivzstepu * 8.0f;
+	zi8stepu = job->zistepu * 8.0f;
 
 	do
 	{
@@ -176,7 +175,7 @@ static void D_DrawSpans8Job (const job_t *job)
 		sdivz = job->sdivzorigin + dv*job->sdivzstepv + du*job->sdivzstepu;
 		tdivz = job->tdivzorigin + dv*job->tdivzstepv + du*job->tdivzstepu;
 		zi = job->ziorigin + dv*job->zistepv + du*job->zistepu;
-		z = (float)0x10000 / zi;	// prescale to 16.16 fixed-point
+		z = k65536 / zi;	// prescale to 16.16 fixed-point
 
 		s = (int)(sdivz * z) + sadjust;
 		if (s > bbextents)
@@ -190,85 +189,130 @@ static void D_DrawSpans8Job (const job_t *job)
 		else if (t < 0)
 			t = 0;
 
-		do
+		if (count > 8)
 		{
-		// calculate s and t at the far end of the span
-			if (count >= 8)
-				spancount = 8;
-			else
-				spancount = count;
+			sdivz += sdivz8stepu;
+			tdivz += tdivz8stepu;
+			zi += zi8stepu;
+			z = k65536 / zi;
 
-			count -= spancount;
-
-			if (count)
+			for (;;)
 			{
-			// calculate s/z, t/z, zi->fixed s and t at far end of span,
-			// calculate s and t steps across span by shifting
-				sdivz += sdivz8stepu;
-				tdivz += tdivz8stepu;
-				zi += zi8stepu;
-				z = (float)0x10000 / zi;	// prescale to 16.16 fixed-point
+				float z_next;
+				unsigned char p0, p1, p2, p3, p4, p5, p6, p7;
+
+				count -= 8;
 
 				snext = (int)(sdivz * z) + sadjust;
 				if (snext > bbextents)
 					snext = bbextents;
 				else if (snext < 8)
-					snext = 8;	// prevent round-off error on <0 steps from
-								//  from causing overstepping & running off the
-								//  edge of the texture
+					snext = 8;
 
 				tnext = (int)(tdivz * z) + tadjust;
 				if (tnext > bbextentt)
 					tnext = bbextentt;
 				else if (tnext < 8)
-					tnext = 8;	// guard against round-off error on <0 steps
+					tnext = 8;
 
 				sstep = (snext - s) >> 3;
 				tstep = (tnext - t) >> 3;
-			}
-			else
-			{
-			// calculate s/z, t/z, zi->fixed s and t at last pixel in span (so
-			// can't step off polygon), clamp, calculate s and t steps across
-			// span by division, biasing steps low so we don't run off the
-			// texture
-				spancountminus1 = (float)(spancount - 1);
-				sdivz += job->sdivzstepu * spancountminus1;
-				tdivz += job->tdivzstepu * spancountminus1;
-				zi += job->zistepu * spancountminus1;
-				z = (float)0x10000 / zi;	// prescale to 16.16 fixed-point
-				snext = (int)(sdivz * z) + sadjust;
-				if (snext > bbextents)
-					snext = bbextents;
-				else if (snext < 8)
-					snext = 8;	// prevent round-off error on <0 steps from
-								//  from causing overstepping & running off the
-								//  edge of the texture
 
-				tnext = (int)(tdivz * z) + tadjust;
-				if (tnext > bbextentt)
-					tnext = bbextentt;
-				else if (tnext < 8)
-					tnext = 8;	// guard against round-off error on <0 steps
-
-				if (spancount > 1)
+				if (count > 8)
 				{
-					sstep = (snext - s) / (spancount - 1);
-					tstep = (tnext - t) / (spancount - 1);
+					sdivz += sdivz8stepu;
+					tdivz += tdivz8stepu;
+					zi += zi8stepu;
+					__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(z_next) : "f"(k65536), "f"(zi));
 				}
+				else if (count > 1)
+				{
+					spancountminus1 = (float)(count - 1);
+					sdivz += job->sdivzstepu * spancountminus1;
+					tdivz += job->tdivzstepu * spancountminus1;
+					zi += job->zistepu * spancountminus1;
+					__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(z_next) : "f"(k65536), "f"(zi));
+				}
+
+				p0 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				p1 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				pdest[0] = p0;
+				pdest[1] = p1;
+
+				p2 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				p3 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				pdest[2] = p2;
+				pdest[3] = p3;
+
+				p4 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				p5 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				pdest[4] = p4;
+				pdest[5] = p5;
+
+				p6 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				s += sstep; t += tstep;
+				p7 = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				pdest[6] = p6;
+				pdest[7] = p7;
+				pdest += 8;
+
+				s = snext;
+				t = tnext;
+
+				z = z_next;
+				if (count <= 8)
+					break;
 			}
 
-			do
+			if (count == 1)
 			{
-				*pdest++ = *(pbase + (s >> 16) + (t >> 16) * cachewidth);
-				s += sstep;
-				t += tstep;
-			} while (--spancount > 0);
+				*pdest = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				continue;
+			}
+		}
+		else
+		{
+			if (count == 1)
+			{
+				*pdest = pbase[(s >> 16) + (t >> 16) * cachewidth];
+				continue;
+			}
+			spancountminus1 = (float)(count - 1);
+			sdivz += job->sdivzstepu * spancountminus1;
+			tdivz += job->tdivzstepu * spancountminus1;
+			zi += job->zistepu * spancountminus1;
+			z = k65536 / zi;
+		}
 
-			s = snext;
-			t = tnext;
+		snext = (int)(sdivz * z) + sadjust;
+		if (snext > bbextents)
+			snext = bbextents;
+		else if (snext < 8)
+			snext = 8;
 
-		} while (count > 0);
+		tnext = (int)(tdivz * z) + tadjust;
+		if (tnext > bbextentt)
+			tnext = bbextentt;
+		else if (tnext < 8)
+			tnext = 8;
+
+		spancount = count;
+		sstep = (snext - s) / (spancount - 1);
+		tstep = (tnext - t) / (spancount - 1);
+
+		#pragma GCC unroll 0
+		do
+		{
+			*pdest++ = pbase[(s >> 16) + (t >> 16) * cachewidth];
+			s += sstep;
+			t += tstep;
+		} while (--spancount > 0);
 
 	} while ((pspan = pspan->pnext) != NULL);
 }

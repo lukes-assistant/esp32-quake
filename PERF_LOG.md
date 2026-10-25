@@ -418,3 +418,21 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   particle squares. D_DrawZSpansJob and D_DrawZSpans clip spans to [d_zrowmin[v], d_zrowmax[v]]
   and advance izi by skip * izistep for bit-exact z values inside the range.
 - **32.46 fps (+11.8% vs 29.03)** (325 frames / 10.01 s). Kept.
+
+### Experiment: local restrict variables and 32-bit loads/stores in R_DrawSurfaceBlock8_mip0..3
+- Cached vid.colormap and step globals in locals and packed 4 pixels per 32-bit load/store in
+  r_surf.c (and r_surf_c1.c).
+- **32.49 fps (+0.1% vs 32.46, noise)**. With z-spans now sparse, core 1 has even more idle
+  headroom during R_ScanEdges and already absorbs surface builds without stalling core 0.
+  Reverted.
+
+### Experiment: branchless 8-pixel loop, pipelined fdiv.s and paired loads in D_DrawSpans8Job
+- Disassembly of D_DrawSpans8Job showed that sharing the inner loop between 8-pixel blocks
+  and the tail caused GCC -O3 to unroll 8 iterations with 7 conditional exit branches inside
+  every 8-pixel block (tying up s1..s7 with constants 1..6), while fdiv.s (z = 0x10000 / zi)
+  stalled on the immediately following fmul.s, and each lbu was immediately followed by sb.
+- Split the full 8-pixel loop (count > 8) from the tail (#pragma GCC unroll 0), issued the
+  next block's fdiv.s via inline assembly before the 8 integer texel fetches so division runs
+  in parallel in the FPU, paired texel loads (p0/p1, p2/p3, p4/p5, p6/p7) to hide load-use
+  latency, and skipped fdiv.s/snext/tnext when the remaining tail is 1 pixel.
+- **34.52 fps (+6.3% vs 32.46)** (346 frames / 10.02 s). Kept.
