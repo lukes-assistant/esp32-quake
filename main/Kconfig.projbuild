@@ -59,6 +59,15 @@ menu "Quake"
         depends on QUAKE_PROFILE
         default 262144
 
+    config QUAKE_TIMEDEMO_LOOP
+        bool "Benchmark mode: run timedemo demo1 in a loop"
+        default n
+        help
+            Instead of the attract-mode demos, start "timedemo demo1" at boot. When it
+            finishes, its result ("N frames T seconds F fps") stays on the console, which
+            fills the screen; 3 seconds later the timedemo runs again, forever. Each run is
+            also reported on the serial console as a "BENCH timedemo" block.
+
     config QUAKE_NATIVE_1280x720
         bool "Render 1280x720 natively (no upscaling)"
         depends on BSP_LCD_HDMI_1280x720_60HZ

@@ -49,10 +49,14 @@ static void quake_task(void *param) {
 	char *argv[]={
 		"quake", 
 		"-basedir", "/sdcard/",
+#if CONFIG_QUAKE_TIMEDEMO_LOOP
+		//runs (from quake.rc's stuffcmds) before startdemos, which then skips the attract loop
+		"+timedemo", "demo1",
+#endif
 		NULL
 	};
 	//initialize Quake
-	QG_Create(3, argv);
+	QG_Create(sizeof(argv)/sizeof(argv[0])-1, argv);
 
 	int64_t oldtime_us = esp_timer_get_time();
 	while (1) {
