@@ -69,9 +69,11 @@ R_MarkLights
 void R_MarkLights (dlight_t *light, int bit, mnode_t *node)
 {
 	mplane_t	*splitplane;
-	float		dist;
+	float		dist, rad, minlight, l0, l1;
 	msurface_t	*surf;
-	int			i;
+	mtexinfo_t	*tex;
+	vec3_t		impact;
+	int			i, sd, td, dmin;
 	
 	if (node->contents < 0)
 		return;
@@ -90,16 +92,47 @@ void R_MarkLights (dlight_t *light, int bit, mnode_t *node)
 		return;
 	}
 		
-// mark the polygons
-	surf = cl.worldmodel->surfaces + node->firstsurface;
-	for (i=0 ; i<node->numsurfaces ; i++, surf++)
+// mark the polygons that the dynamic light actually reaches
+	rad = light->radius - fabsf(dist);
+	minlight = light->minlight;
+	if (rad > minlight)
 	{
-		if (surf->dlightframe != r_dlightframecount)
+		minlight = rad - minlight;
+		impact[0] = light->origin[0] - splitplane->normal[0] * dist;
+		impact[1] = light->origin[1] - splitplane->normal[1] * dist;
+		impact[2] = light->origin[2] - splitplane->normal[2] * dist;
+
+		surf = cl.worldmodel->surfaces + node->firstsurface;
+		for (i=0 ; i<node->numsurfaces ; i++, surf++)
 		{
-			surf->dlightbits = 0;
-			surf->dlightframe = r_dlightframecount;
+			tex = surf->texinfo;
+			l0 = DotProduct (impact, tex->vecs[0]) + tex->vecs[0][3] - surf->texturemins[0];
+			if (l0 < 0.0f)
+				sd = (int)(-l0);
+			else if (l0 > (float)surf->extents[0])
+				sd = (int)(l0 - (float)surf->extents[0]);
+			else
+				sd = 0;
+
+			l1 = DotProduct (impact, tex->vecs[1]) + tex->vecs[1][3] - surf->texturemins[1];
+			if (l1 < 0.0f)
+				td = (int)(-l1);
+			else if (l1 > (float)surf->extents[1])
+				td = (int)(l1 - (float)surf->extents[1]);
+			else
+				td = 0;
+
+			dmin = (sd > td) ? (sd + (td >> 1)) : (td + (sd >> 1));
+			if ((float)dmin >= minlight)
+				continue;
+
+			if (surf->dlightframe != r_dlightframecount)
+			{
+				surf->dlightbits = 0;
+				surf->dlightframe = r_dlightframecount;
+			}
+			surf->dlightbits |= bit;
 		}
-		surf->dlightbits |= bit;
 	}
 
 	R_MarkLights (light, bit, node->children[0]);

@@ -132,8 +132,13 @@ void D_CalcGradients (msurface_t *pface)
 
 	mipscale = 1.0 / (float)(1 << miplevel);
 
-	TransformVector (pface->texinfo->vecs[0], p_saxis);
-	TransformVector (pface->texinfo->vecs[1], p_taxis);
+	p_saxis[0] = DotProduct (pface->texinfo->vecs[0], vright);
+	p_saxis[1] = DotProduct (pface->texinfo->vecs[0], vup);
+	p_saxis[2] = DotProduct (pface->texinfo->vecs[0], vpn);
+
+	p_taxis[0] = DotProduct (pface->texinfo->vecs[1], vright);
+	p_taxis[1] = DotProduct (pface->texinfo->vecs[1], vup);
+	p_taxis[2] = DotProduct (pface->texinfo->vecs[1], vpn);
 
 	t = xscaleinv * mipscale;
 	d_sdivzstepu = p_saxis[0] * t;
@@ -148,7 +153,9 @@ void D_CalcGradients (msurface_t *pface)
 	d_tdivzorigin = p_taxis[2] * mipscale - xcenter * d_tdivzstepu -
 			ycenter * d_tdivzstepv;
 
-	VectorScale (transformed_modelorg, mipscale, p_temp1);
+	p_temp1[0] = transformed_modelorg[0] * mipscale;
+	p_temp1[1] = transformed_modelorg[1] * mipscale;
+	p_temp1[2] = transformed_modelorg[2] * mipscale;
 
 	t = 0x10000*mipscale;
 	sadjust = ((fixed16_t)(DotProduct (p_temp1, p_saxis) * 0x10000 + 0.5)) -

@@ -1054,3 +1054,22 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
 - **51.49 fps** (515 frames / 10.00 s; -0.26 fps vs 51.75 because world Z-spans are now properly
   written for the screen rectangles behind visible torches). Kept.
 
+### Experiment: Candidate 3 — `R_EmitEdge`/`R_RenderFace` FPU overlap & hardware `fcvt.w.s rup`, `R_LeadingEdge` fast path, and exact 2D extent culling in `R_MarkLights`
+- `r_draw.c` (`R_EmitEdge`, `R_RenderFace`):
+  - Replaced external `newlib` `ceilf()` calls (2 per edge) with a single-instruction RISC-V FPU
+    ceiling conversion (`fcvt.w.s %0, %1, rup`), eliminating register spills across function calls.
+  - Inlined `TransformVector` and issued non-blocking `fdiv.s` (`1.0f / tz`, `du / dv`, and
+    `1.0f / dist`) before computing the `x`/`y` dot products and `surface_p`/`edge` stores so
+    compute hides the 20-cycle FPU divide latency.
+  - Prefetched the next surfedge's `medge_t` (`__builtin_prefetch`) in `R_RenderFace`.
+- `d_edge.c` (`D_CalcGradients`): inlined `TransformVector` and `VectorScale`.
+- `r_edge.c` (`R_LeadingEdge`, `R_GenerateSpans`): added a non-submodel fast path in `R_LeadingEdge`
+  and prefetched `edge->next` in `R_GenerateSpans`.
+- `r_light.c` (`R_MarkLights`): culled dynamic lights against each surface's actual `(s, t)` extents
+  (`texturemins` / `extents`) and `minlight` using the exact distance formula of
+  `R_AddDynamicLights` instead of marking every coplanar surface on the infinite splitting plane.
+  Reduced surface builds per frame from **16.0 (84,840 texels, 13.8 dlight)** to **11.8 (67,332
+  texels, 9.8 dlight)** (-26% surface builds).
+- **52.58 fps (+1.09 fps / +2.1% vs 51.49, +5.2% vs 49.98 baseline)** (526 frames / 10.00 s). Kept.
+
+

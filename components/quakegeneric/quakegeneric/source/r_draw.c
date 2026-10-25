@@ -70,6 +70,13 @@ int				r_ceilv1;
 
 qboolean	r_lastvertvalid;
 
+static inline int R_FastCeilF (float x)
+{
+	int r;
+	__asm__ ("fcvt.w.s %0, %1, rup" : "=r"(r) : "f"(x));
+	return r;
+}
+
 /*
 ================
 R_EmitEdge
@@ -85,6 +92,7 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 	int		v, v2, ceilv0;
 	float	scale, lzi0, u0, v0;
 	int		side;
+	const float k_one = 1.0f;
 
 	if (r_lastvertvalid)
 	{
@@ -95,16 +103,18 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 	}
 	else
 	{
+		float tz0;
 		world = &pv0->position[0];
 	
-	// transform and project
+	// transform and project: start 1/z divide before computing x and y projections
 		VectorSubtract (world, modelorg, local);
-		TransformVector (local, transformed);
-	
-		if (transformed[2] < NEAR_CLIP)
-			transformed[2] = NEAR_CLIP;
-	
-		lzi0 = 1.0 / transformed[2];
+		tz0 = DotProduct (local, vpn);
+		if (tz0 < NEAR_CLIP)
+			tz0 = NEAR_CLIP;
+		__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(lzi0) : "f"(k_one), "f"(tz0));
+
+		transformed[0] = DotProduct (local, vright);
+		transformed[1] = DotProduct (local, vup);
 	
 	// FIXME: build x/yscale into transform?
 		scale = xscale * lzi0;
@@ -121,19 +131,23 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 		if (v0 > r_refdef.fvrectbottom_adj)
 			v0 = r_refdef.fvrectbottom_adj;
 	
-		ceilv0 = (int) ceilf(v0);
+		ceilv0 = R_FastCeilF (v0);
 	}
 
-	world = &pv1->position[0];
+	{
+		float tz1;
+		world = &pv1->position[0];
 
-// transform and project
-	VectorSubtract (world, modelorg, local);
-	TransformVector (local, transformed);
+	// transform and project: start 1/z divide before computing x and y projections
+		VectorSubtract (world, modelorg, local);
+		tz1 = DotProduct (local, vpn);
+		if (tz1 < NEAR_CLIP)
+			tz1 = NEAR_CLIP;
+		__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(r_lzi1) : "f"(k_one), "f"(tz1));
 
-	if (transformed[2] < NEAR_CLIP)
-		transformed[2] = NEAR_CLIP;
-
-	r_lzi1 = 1.0 / transformed[2];
+		transformed[0] = DotProduct (local, vright);
+		transformed[1] = DotProduct (local, vup);
+	}
 
 	scale = xscale * r_lzi1;
 	r_u1 = (xcenter + scale*transformed[0]);
@@ -161,7 +175,7 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 
 	r_emitted = 1;
 
-	r_ceilv1 = (int) ceilf(r_v1);
+	r_ceilv1 = R_FastCeilF (r_v1);
 
 
 // create the edge
@@ -188,25 +202,29 @@ void R_EmitEdge (mvertex_t *pv0, mvertex_t *pv1)
 	if (side == 0)
 	{
 	// trailing edge (go from p1 to p2)
+		float du = r_u1 - u0;
+		float dv = r_v1 - v0;
+		__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(u_step) : "f"(du), "f"(dv));
 		v = ceilv0;
 		v2 = r_ceilv1 - 1;
 
 		edge->surfs[0] = surface_p - surfaces;
 		edge->surfs[1] = 0;
 
-		u_step = ((r_u1 - u0) / (r_v1 - v0));
 		u = u0 + ((float)v - v0) * u_step;
 	}
 	else
 	{
 	// leading edge (go from p2 to p1)
+		float du = u0 - r_u1;
+		float dv = v0 - r_v1;
+		__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(u_step) : "f"(du), "f"(dv));
 		v2 = ceilv0 - 1;
 		v = r_ceilv1;
 
 		edge->surfs[0] = 0;
 		edge->surfs[1] = surface_p - surfaces;
 
-		u_step = ((u0 - r_u1) / (v0 - r_v1));
 		u = r_u1 + ((float)v - r_v1) * u_step;
 	}
 
@@ -427,6 +445,11 @@ void R_RenderFace (msurface_t *fa, int clipflags)
 	for (i=0 ; i<fa->numedges ; i++)
 	{
 		lindex = currententity->model->surfedges[fa->firstedge + i];
+		if (i + 1 < fa->numedges)
+		{
+			int next_lindex = currententity->model->surfedges[fa->firstedge + i + 1];
+			__builtin_prefetch (&pedges[next_lindex >= 0 ? next_lindex : -next_lindex], 0, 1);
+		}
 
 		if (lindex > 0)
 		{
@@ -545,6 +568,13 @@ void R_RenderFace (msurface_t *fa, int clipflags)
 
 	r_polycount++;
 
+	pplane = fa->plane;
+	{
+		const float k_one = 1.0f;
+		float dist = pplane->dist - DotProduct (modelorg, pplane->normal);
+		__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(distinv) : "f"(k_one), "f"(dist));
+	}
+
 	surface_p->data = (void *)fa;
 	surface_p->nearzi = r_nearzi;
 	surface_p->flags = fa->flags;
@@ -554,11 +584,9 @@ void R_RenderFace (msurface_t *fa, int clipflags)
 	surface_p->key = r_currentkey++;
 	surface_p->spans = NULL;
 
-	pplane = fa->plane;
-// FIXME: cache this?
-	TransformVector (pplane->normal, p_normal);
-// FIXME: cache this?
-	distinv = 1.0 / (pplane->dist - DotProduct (modelorg, pplane->normal));
+	p_normal[0] = DotProduct (pplane->normal, vright);
+	p_normal[1] = DotProduct (pplane->normal, vup);
+	p_normal[2] = DotProduct (pplane->normal, vpn);
 
 	surface_p->d_zistepu = p_normal[0] * xscaleinv * distinv;
 	surface_p->d_zistepv = -p_normal[1] * yscaleinv * distinv;

@@ -457,17 +457,29 @@ void R_LeadingEdge (edge_t *edge)
 	// end edge)
 		if (++surf->spanstate == 1)
 		{
-			if (surf->insubmodel)
-				r_bmodelactive++;
-
 			surf2 = surfaces[1].next;
+
+			if (!surf->insubmodel)
+			{
+				if (surf->key < surf2->key)
+					goto newtop;
+
+				do
+				{
+					surf2 = surf2->next;
+				} while (surf->key >= surf2->key);
+
+				goto gotposition;
+			}
+
+			r_bmodelactive++;
 
 			if (surf->key < surf2->key)
 				goto newtop;
 
 		// if it's two surfaces on the same plane, the one that's already
 		// active is in front, so keep going unless it's a bmodel
-			if (surf->insubmodel && (surf->key == surf2->key))
+			if (surf->key == surf2->key)
 			{
 			// must be two bmodels in the same leaf; sort on 1/z
 				fu = (float)(edge->u - 0xFFFFF) * (1.0 / 0x100000);
@@ -581,7 +593,8 @@ void R_GenerateSpans (void)
 
 // generate spans
 	for (edge=edge_head.next ; edge != &edge_tail; edge=edge->next)
-	{			
+	{
+		__builtin_prefetch (edge->next, 0, 1);
 		if (edge->surfs[0])
 		{
 		// it has a left surface, so a surface is going away for this span
@@ -616,7 +629,8 @@ void R_GenerateSpansBackward (void)
 
 // generate spans
 	for (edge=edge_head.next ; edge != &edge_tail; edge=edge->next)
-	{			
+	{
+		__builtin_prefetch (edge->next, 0, 1);
 		if (edge->surfs[0])
 			R_TrailingEdge (&surfaces[edge->surfs[0]], edge);
 
