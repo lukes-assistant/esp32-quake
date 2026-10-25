@@ -25,6 +25,7 @@ void R_PipeStartRecording (void);
 qboolean R_PipeDefer3D (void);
 void R_PipeAddAlias (aliasitem_t *items, int count);
 void R_PipeAddParticle (const particle_t *p);
+void R_PipeAddSprite (const entity_t *e);
 void R_PipeRecord2D (drawop_t op, int x, int y, int w, int h, void *p, const byte *translation);
 void R_PipeSetPalette (const unsigned char *palette);
 qboolean R_PipePresent (byte *buffer);

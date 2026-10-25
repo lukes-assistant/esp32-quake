@@ -20,6 +20,8 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/d_modech.c
 	${QUAKE_SOURCE_DIR}/source/d_part.c
 	${QUAKE_SOURCE_DIR}/source/d_part_c1.c
+	${QUAKE_SOURCE_DIR}/source/r_sprite_c1.c
+	${QUAKE_SOURCE_DIR}/source/d_sprite_c1.c
 	${QUAKE_SOURCE_DIR}/source/r_pipe.c
 	${QUAKE_SOURCE_DIR}/source/d_polyse.c
 	${QUAKE_SOURCE_DIR}/source/d_polyse_c1.c

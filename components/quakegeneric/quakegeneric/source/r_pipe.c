@@ -18,7 +18,7 @@ particles, translation tables, palette, view state) or doesn't change while a fr
 pending: model and pic data live in the cache/hunk, and every Cache/Hunk allocation or
 release first waits for the pending frame (R_PipeSync, zone.c).
 
-Frames that can't be deferred (underwater warp, sprites) draw their models and particles
+Frames that can't be deferred (underwater warp) draw their models, sprites and particles
 on core 0 as before (after waiting for the pending frame); their 2D is still recorded.
 */
 
@@ -56,6 +56,8 @@ typedef struct
 	pixel_t		*d_viewbuffer;
 	float		time;
 	refdef_t	refdef;
+	clipplane_t	clipplanes[4];		// (sprites)
+	float		xscaleinv, yscaleinv;
 } pipeview_t;
 
 typedef struct
@@ -65,6 +67,8 @@ typedef struct
 	int				numaliases;
 	aliasitem_t		aliases[MAX_VISEDICTS + 1];
 	entity_t		entities[MAX_VISEDICTS + 1];	// snapshots the items point to
+	int				numsprites;
+	entity_t		sprites[MAX_VISEDICTS];
 	int				numparticles;
 	pipeparticle_t	particles[MAX_PIPE_PARTICLES];
 	int				numcmds;
@@ -105,6 +109,11 @@ pixel_t		*d_viewbuffer_c1;
 EXT_RAM_BSS_ATTR short	*zspantable_c1[MAXHEIGHT];
 float		r_time_c1;
 extern refdef_t	r_refdef_c1;
+extern entity_t		*currententity_c1;
+extern vec3_t		modelorg_c1, r_entorigin_c1;
+extern clipplane_t	view_clipplanes_c1[4];
+extern float		xscaleinv_c1, yscaleinv_c1;
+void R_DrawSprite_c1 (void);
 
 void D_DrawParticle_c1 (particle_t *pparticle);
 
@@ -142,6 +151,9 @@ static void R_PipeCaptureView (pipeview_t *v)
 	v->d_viewbuffer = d_viewbuffer;
 	v->time = cl.time;
 	v->refdef = r_refdef;
+	memcpy (v->clipplanes, view_clipplanes, sizeof(v->clipplanes));
+	v->xscaleinv = xscaleinv;
+	v->yscaleinv = yscaleinv;
 }
 
 static void R_PipeApplyView (const pipeview_t *v)
@@ -180,6 +192,9 @@ static void R_PipeApplyView (const pipeview_t *v)
 	d_viewbuffer_c1 = v->d_viewbuffer;
 	r_time_c1 = v->time;
 	r_refdef_c1 = v->refdef;
+	memcpy (view_clipplanes_c1, v->clipplanes, sizeof(view_clipplanes_c1));
+	xscaleinv_c1 = v->xscaleinv;
+	yscaleinv_c1 = v->yscaleinv;
 	r_alias_split_c1 = false;
 	// the scan table doesn't depend on the buffer; the z span table does
 	for (i = 0 ; i < vid.height ; i++)
@@ -255,29 +270,14 @@ can draw them itself, using core 1 for half of the models.
 qboolean R_PipeDefer3D (void)
 {
 	pipeframe_t	*f = &frames[recframe];
-	int			i;
 
 	r_pipe_deferred3d = false;
 	f->deferred3d = false;
 	f->numaliases = 0;
+	f->numsprites = 0;
 	f->numparticles = 0;
 	if (r_pipeline.value && !r_dowarp)
-	{
 		r_pipe_deferred3d = true;
-		if (r_drawentities.value)
-		{
-			for (i = 0 ; i < cl_numvisedicts ; i++)
-			{
-				if (cl_visedicts[i] == &cl_entities[cl.viewentity])
-					continue;
-				if (cl_visedicts[i]->model->type == mod_sprite)
-				{
-					r_pipe_deferred3d = false;	// sprites are only drawn by core 0
-					break;
-				}
-			}
-		}
-	}
 	r_pipe_stat_frames++;
 	if (r_pipe_deferred3d)
 	{
@@ -304,6 +304,14 @@ void R_PipeAddAlias (aliasitem_t *items, int count)
 		f->aliases[f->numaliases].entity = &f->entities[f->numaliases];
 		f->numaliases++;
 	}
+}
+
+void R_PipeAddSprite (const entity_t *e)
+{
+	pipeframe_t	*f = &frames[recframe];
+
+	if (f->numsprites < MAX_VISEDICTS)
+		f->sprites[f->numsprites++] = *e;
 }
 
 void R_PipeAddParticle (const particle_t *p)
@@ -395,6 +403,13 @@ void R_PipeRun (void)
 		R_PipeApplyView (&f->view);
 		if (n - gun)
 			R_DrawAliasItems_c1 (f->aliases, n - gun);
+		for (i = 0 ; i < f->numsprites ; i++)
+		{	// as R_DrawEntitiesAndViewModel
+			currententity_c1 = &f->sprites[i];
+			VectorCopy (currententity_c1->origin, r_entorigin_c1);
+			VectorSubtract (r_origin_c1, r_entorigin_c1, modelorg_c1);
+			R_DrawSprite_c1 ();
+		}
 		memset (&p, 0, sizeof(p));
 		for (i = 0 ; i < f->numparticles ; i++)
 		{

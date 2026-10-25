@@ -22,6 +22,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "r_local.h"
 
+// time for animation (a snapshot on core 1, see view_c1_names.h)
+#ifndef R_ALIAS_TIME
+#define R_ALIAS_TIME	cl.time
+#endif
+
 static int				clip_current;
 static vec5_t			clip_verts[2][MAXWORKINGVERTS];
 static int				sprite_width, sprite_height;
@@ -259,7 +264,7 @@ mspriteframe_t *R_GetSpriteframe (msprite_t *psprite)
 		numframes = pspritegroup->numframes;
 		fullinterval = pintervals[numframes-1];
 
-		time = cl.time + currententity->syncbase;
+		time = R_ALIAS_TIME + currententity->syncbase;
 
 	// when loading in Mod_LoadSpriteGroup, we guaranteed all interval values
 	// are positive, so we don't have to worry about division by 0

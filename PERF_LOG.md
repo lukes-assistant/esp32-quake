@@ -842,3 +842,16 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   edge sorting, client) is the most: ~1.1 G stalled cycles per 10 s, ~31% of core 0. It walks
   the world model (nodes, planes, msurfaces, edges, vertexes) in PSRAM.
 
+### Experiment: sprites drawn by core 1 too (every frame can now be deferred)
+- r_sprite.c and d_sprite.c compiled a second time for core 1 (sprite_c1_names.h): the sprite
+  code writes the d_* gradient globals the world code uses, reads view_clipplanes and the view
+  vectors, and calls TransformVector (which reads core 0's view vectors), so all of those get
+  core-1 copies; the view snapshot also carries view_clipplanes and xscaleinv/yscaleinv.
+  Sprite entities are recorded as snapshots and drawn after the alias models, before particles
+  and the gun (original order).
+- Before, frames with sprites (explosions etc.: ~16% of the window) waited for core 1 and drew
+  their models on core 0. Now 500 of 500 frames are deferred.
+- Forced screenshots of frames with sprites: explosion sprite correct, gun in front of it.
+  4 minutes through all demos: no faults.
+- **49.75-49.88 fps (+2.1% vs 48.84)**. Kept.
+

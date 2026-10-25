@@ -1125,6 +1125,11 @@ void R_DrawEntitiesAndViewModel (void)
 				continue;
 			if (currententity->model->type != mod_sprite)
 				continue;
+			if (deferred)
+			{
+				R_PipeAddSprite (currententity);	// drawn by core 1 (r_pipe.c)
+				continue;
+			}
 			VectorCopy (currententity->origin, r_entorigin);
 			VectorSubtract (r_origin, r_entorigin, modelorg);
 			R_DrawSprite ();
