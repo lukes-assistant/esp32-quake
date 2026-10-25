@@ -11,6 +11,16 @@ menu "Quake"
             no input and does not change what the game does. A timedemo produces the
             same report when it finishes.
 
+    config QUAKE_SCREENSHOTS
+        int "After the benchmark, dump N screenshots on the console (0 = off)"
+        default 0
+        range 0 10
+        help
+            For checking the picture without a monitor. After the attract-demo benchmark
+            window, every 100th presented frame (8-bit pixels plus palette) is printed as
+            hex "SHOT" lines; tools/screenshots.py turns them into PNG files. Printing a
+            frame takes a few seconds, during which the game is stalled.
+
     config QUAKE_PROFILE
         bool "Sample the game core's program counter while benchmarking"
         default n

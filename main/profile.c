@@ -218,6 +218,20 @@ void profile_frame() {
 	}
 }
 
+static int shot_countdown=-1, shots_left=CONFIG_QUAKE_SCREENSHOTS;
+
+int profile_screenshot_due() {
+	if (shots_left<=0) return 0;
+	if (shot_countdown<0) {
+		if (bench_state!=0 || CONFIG_QUAKE_BENCHMARK_SECONDS==0) return 0;
+		shot_countdown=1;	//benchmark finished: first shot on the next frame
+	}
+	if (--shot_countdown>0) return 0;
+	shots_left--;
+	shot_countdown=100;
+	return 1;
+}
+
 void QG_TimeDemoStart(void) {
 	if (active) return; //attract-demo window still running
 	window_start();

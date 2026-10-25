@@ -69,11 +69,33 @@ static SemaphoreHandle_t drawing_mux;
 static int fps_ticks=0;
 static int64_t start_time_fps_meas;
 
+//print an 8-bit frame and the palette as hex lines (tools/screenshots.py)
+static void screenshot_dump(const uint8_t *p) {
+	static int n=0;
+	static const char hex[]="0123456789abcdef";
+	char line[QUAKEGENERIC_RES_X*2+1];
+	printf("SHOT_BEGIN %d %d %d\n", n++, QUAKEGENERIC_RES_X, QUAKEGENERIC_RES_Y);
+	printf("SHOT_PAL ");
+	for (int i=0; i<256; i++) printf("%06lx", (unsigned long)pal888[i]);
+	printf("\n");
+	for (int y=0; y<QUAKEGENERIC_RES_Y; y++) {
+		for (int x=0; x<QUAKEGENERIC_RES_X; x++) {
+			line[x*2]=hex[p[x]>>4];
+			line[x*2+1]=hex[p[x]&15];
+		}
+		line[QUAKEGENERIC_RES_X*2]=0;
+		printf("SHOT %d %s\n", y, line);
+		p+=QUAKEGENERIC_RES_X;
+	}
+	printf("SHOT_END\n");
+}
+
 void QG_DrawFrame(void *pixels) {
 	int64_t wait_start_us=esp_timer_get_time();
 	xSemaphoreTake(drawing_mux, portMAX_DELAY);
 	profile_drawframe_wait(esp_timer_get_time()-wait_start_us);
 	profile_frame();
+	if (profile_screenshot_due()) screenshot_dump(pixels);
 	cur_pixels=pixels;
 	xSemaphoreGive(drawing_mux);
 	xTaskNotifyGive(draw_task_handle);

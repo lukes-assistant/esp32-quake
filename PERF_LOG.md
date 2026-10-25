@@ -618,3 +618,43 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   client maths now run in single precision, which is what Quake's data is anyway.
 - **41.17 fps (+4.5% vs 39.38)**. Kept.
 
+### Profile at 40.9 fps (after float libm)
+- Core 0: D_DrawSpans8Job 26.7%, idle 5.9%, R_DrawSurfaceBlock8_mip0 5.3%, D_PolysetDrawSpans8
+  4.6%, R_GenerateSpans 4.4%, D_DrawZSpansJob 4.3%, R_LeadingEdge 3.5%, R_RecursiveWorldNode
+  3.3%, memcpy 2.3%, CL_RelinkEntities 2.3%. Core 1: spans 36.9%, idle 31.1%.
+
+### Diagnostics (wrong picture, not kept)
+- Span writes to a dummy SRAM line instead of the PSRAM framebuffer: **44.33 fps (+7.7%)**:
+  upper bound for anything that speeds up framebuffer writes.
+- Span texel reads from an 8 KB SRAM table instead of the surface cache: **43.30 fps
+  (+5.7%)**. (A first try with a 32 KB static table ran at 20 fps; probably it pushed some
+  internal allocation into PSRAM. Ignored.) So the span loop is mostly instruction-bound:
+  ~9 instructions per pixel (srai, srai, mul, add, add, lbu, sb, 2x add).
+- Core-0 phase timing (Sys_FloatTime around phases, ms/frame, 300-frame block in demo1):
+  host before rendering 1.1, R_SetupFrame..R_ComputeZRows 0.85, world (R_EdgeDrawing) 19.0,
+  entities 5.8, particles 1.0, 2D+VID_Update ~0.6, sound 0.4.
+- Core-1 idle by core-0 phase (profiler samples on core 1 tagged with core 0's phase):
+
+  | core 0 phase | share of time | core 1 idle in it |
+  |---|---|---|
+  | outside R_RenderView (host, client, 2D, sound) | 12.1% | 82% |
+  | R_RenderWorld (BSP walk, edge emission) | 10.6% | 97% |
+  | R_ScanEdges (spans published as they're made) | 39.3% | 4% |
+  | D_JobsEndFrame (drain the queue) | 15.9% | 14% |
+  | entities (alias split L/R) | 17.9% | 17% |
+  | particles + R_SetupFrame etc. | 4.3% | 95% |
+
+  Core 1 idles almost entirely while core 0 does serial work (~27% of the frame). Perfect
+  balance of the current total work would give ~50 fps; 60 needs both less work and that.
+
+### Experiment: entity_t.model/msgtime moved next to forcelink (one cache line for the
+### per-slot scan in CL_RelinkEntities)
+- **41.46 fps (+0.7%, noise level)**. Reverted.
+
+### Tool: screenshots over the console (CONFIG_QUAKE_SCREENSHOTS=N)
+- After the benchmark window, every 100th presented frame is printed as hex SHOT lines
+  (8-bit pixels + palette); tools/screenshots.py writes PNGs. Lets me check the picture for
+  render-order changes without the user's monitor (screenshots only after the measured window,
+  so benchmarks are unaffected). Reference shots at 41.2 fps look right (world, monsters,
+  view model, status bar).
+
