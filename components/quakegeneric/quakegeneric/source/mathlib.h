@@ -19,6 +19,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // mathlib.h
 
+// ESP32-P4 port: the FPU is single precision, so use the float versions of the libm functions
+// Quake calls with float arguments (the double ones are software routines)
+#include <math.h>
+#define sqrt(x)		sqrtf(x)
+#define sin(x)		sinf(x)
+#define cos(x)		cosf(x)
+#define atan2(y,x)	atan2f(y,x)
+#define atan(x)		atanf(x)
+#define floor(x)	floorf(x)
+#define ceil(x)		ceilf(x)
+#define fabs(x)		fabsf(x)
+#define pow(x,y)	powf(x,y)
+
 typedef float vec_t;
 typedef vec_t vec3_t[3];
 typedef vec_t vec5_t[5];

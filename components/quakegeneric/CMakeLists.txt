@@ -92,3 +92,4 @@ idf_component_register(
 idf_build_set_property(COMPILE_OPTIONS "-w" APPEND) # Suppress all warnings (which are often reported as errors)
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3)
 target_compile_options(${COMPONENT_LIB} PRIVATE -fsingle-precision-constant)
+target_compile_options(${COMPONENT_LIB} PRIVATE -fno-math-errno)

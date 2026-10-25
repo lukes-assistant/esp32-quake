@@ -605,3 +605,16 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
 - Builds per frame 34.4 -> **16.9** (texels 226k -> 89k; dlight-caused 31.5 -> 14.1).
 - **39.38 fps (+6.3% vs 37.05)**. Kept.
 
+### Profile at 39.1 fps (both cores)
+- Core 0: D_DrawSpans8Job 25.3%, idle 5.6%, R_DrawSurfaceBlock8_mip0 5.0%, D_PolysetDrawSpans8
+  4.4%, R_GenerateSpans 4.0%, D_DrawZSpansJob 3.9%, R_LeadingEdge 3.4%, R_RecursiveWorldNode
+  3.1%, CL_RelinkEntities 2.3%, memcpy 2.1%, Draw_ConsoleBackground 1.8%, S_PaintChannels 1.7%,
+  __ieee754_sqrt 0.75%.
+- Core 1: D_DrawSpans8Job 34.4%, idle 34.3%, surface builds 7%, alias ~11%, z 4.9%.
+
+### Experiment: float versions of libm (sqrt/sin/cos/atan2/atan/floor/ceil/fabs/pow) + -fno-math-errno
+- mathlib.h maps them to sqrtf etc. for the whole engine (the double versions are software
+  routines on this single-precision FPU; -fno-math-errno lets sqrtf become fsqrt.s). Game and
+  client maths now run in single precision, which is what Quake's data is anyway.
+- **41.17 fps (+4.5% vs 39.38)**. Kept.
+
