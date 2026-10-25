@@ -1200,3 +1200,23 @@ D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3
 - Halves the gun z bytes and cache-line misses; frees 600 KB PSRAM.
 - **52.77 fps (+0.3%, noise)**. Reverted. The gun's cost is the per-pixel z load -> compare ->
   branch dependency, not PSRAM misses, so it's not a placement problem.
+
+## 2026-10-25 — Display mode: 720x480 tried, 1280x720 made the default
+
+### 720x480 (CEA 480p as VIC 3, 16:9) -- no picture on the monitor, reverted
+- Added a BSP/LT8912B mode: CEA vertical timing (480+9+6+30) with the horizontal blanking
+  shortened to 847 total (720+16+62+49) so the 640x480 mode's 160/6 MHz DPI clock gives
+  59.97 Hz; Quake rendered 720x480 natively (MAXWIDTH 720, 11.5 KB bands, 16:9 pixel aspect).
+- On the board everything worked: LT8912B locked, PPA self-test passed, screenshot correct,
+  **49.24 fps** (-6.4% vs 52.62 at 640x480; internal RAM largest block 32 -> 21.5 KB).
+- The user's monitor showed no picture (like 720x400@70 earlier). Likely causes: the
+  non-standard horizontal blanking or the 16:9 flag; exact 480p needs 27 MHz (858 total), which
+  the 160/240 MHz PLL dividers can't make. Not kept.
+
+### 1280x720 default (existing mode: Quake 512x288, PPA scales 2.5x)
+- **32.11 fps** (322 frames / 10.03 s); the user measured 33 fps in `timedemo demo1`.
+- Display-bound: per frame the CPU palette conversion to RGB565 takes 6.77 ms and the PPA
+  scale 23.63 ms (it writes a 2.76 MB RGB888 frame to PSRAM while scan-out reads ~166 MB/s).
+  The render resolution barely matters; the output size does.
+- Internal RAM free 42.6 KB, largest block 32 KB. sdkconfig.defaults now selects
+  CONFIG_BSP_LCD_HDMI_1280x720_60HZ; CONFIG_BSP_LCD_HDMI_640x480_60HZ is the ~52 fps mode.
