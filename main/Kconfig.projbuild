@@ -59,4 +59,21 @@ menu "Quake"
         depends on QUAKE_PROFILE
         default 262144
 
+    config QUAKE_L2_AUTOLOAD
+        bool "L2 cache hardware autoload on the surface cache and hunk (unsafe)"
+        default n
+        help
+            Prefetches the next cache line on misses and hits in the two regions (vid_null.c).
+            Worth ~1.5% fps, but with it on the game crashed on corrupted data 3 times in 11
+            minutes, and 0 times in 19 minutes with it off (PERF_LOG.md, stability
+            investigation). Off by default.
+
+    config QUAKE_STABILITY_DEBUG
+        bool "Stability diagnostics (reset record, stall watchdog, black-frame log)"
+        default n
+        help
+            Prints the reset reason and the previous run's last state at boot, reports
+            frame stalls with both cores' sampled program counters, and logs runs of
+            black frames. Output lines start with "STAB" (main/stability.c).
+
 endmenu

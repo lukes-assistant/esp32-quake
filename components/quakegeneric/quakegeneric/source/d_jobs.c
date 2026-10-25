@@ -587,3 +587,15 @@ void D_JobsWaitAll (void)
 		D_JobsWaitRange (0, numjobs);
 }
 
+
+/*
+D_JobsDebugState
+
+One-line snapshot of the queue for the stall watchdog (main/stability.c); racy by design.
+*/
+void D_JobsDebugState (char *buf, int size)
+{
+	snprintf (buf, size, "jobs %d/%d next %d closed %d active %d gen %lu done %lu wwait %d",
+		numjobs, MAX_JOBS, nextjob, jobs_closed, jobs_active, (unsigned long)frame_gen,
+		(unsigned long)done_gen, worker_waiting);
+}

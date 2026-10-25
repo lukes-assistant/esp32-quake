@@ -104,3 +104,7 @@ void QG_CopyWait(uint32_t ticket) {
 		}
 	}
 }
+
+void QG_CopyDebugState(char *buf, int size) {
+	snprintf(buf, size, "bandcopy started %lu done %lu", (unsigned long)copies_started, (unsigned long)copies_done);
+}

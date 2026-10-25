@@ -1073,3 +1073,57 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
 - **52.58 fps (+1.09 fps / +2.1% vs 51.49, +5.2% vs 49.98 baseline)** (526 frames / 10.00 s). Kept.
 
 
+
+## 2026-10-25 — Stability investigation: crashes/reboots (branch `stability-debug`)
+
+Tooling (CONFIG_QUAKE_STABILITY_DEBUG, main/stability.c; costs ~0.5 fps): reset reason plus the
+previous run's last state/PCs from .noinit at boot; a stall watchdog sampling both cores' PCs
+(ASSIST_DEBUG) and the job/pipe/bandcopy state; a black-frame detector; heap headroom, a
+failed-allocation hook, PVT/DC-DC state and an LT8912B DSI-sync probe every 10 s.
+tools/debug/hang_snapshot.gdb + `openocd -c "set ESP_FLASH_SIZE 0" -f board/esp32p4-builtin.cfg`
+attaches to a running/hung board WITHOUT resetting it (with flash support on, OpenOCD's
+gdb-attach handler does `reset halt` because memory protection is enabled -- that is why
+earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach, game continues.
+
+### Finding 1: memory corruption crashes, triggered by L2 autoload (689f20d)
+- Diagnostics build (= clean HEAD + STAB code), autoload ON: **3 panics in 660 s**, each in a
+  different consumer of corrupted data: Load fault in R_MarkLights (core 0, BSP node pointer),
+  Load fault in D_PolysetDrawSpans8_c1 (core 1, span package with float garbage in pz/pdest),
+  Store fault in D_DrawSpans8Job (core 0, garbage span coordinates).
+- Same build, CONFIG_QUAKE_L2_AUTOLOAD=n: **0 panics in 1144 s** (p ~0.5% if the rate were
+  unchanged). 51.5 vs 52.3 fps. Consistent with the earlier note that the ROM autoload API
+  is unsafe on this chip.
+
+### Finding 2: the core supply is at its limit (hardware)
+- PVT auto-dbias (CONFIG_ESP_ENABLE_PVT) requests HP dbias **31 = the maximum** from boot and
+  all the time (dcm_vset 27 = ~1.25 V target). This board is an Olimex ESP32-P4-PC **Rev.B**:
+  VDD_HP comes from a TPS62A02 (U5; not on Espressif's list of verified DC-DC parts -- Rev.C
+  switched to the listed TLV62569) with a 10.5k/10.5k feedback divider (R46/R47, same in Rev.C)
+  on FB_DCDC; Espressif's guideline
+  for chip rev v1.0/v1.3 is to leave those resistors unpopulated (pads only), and advisory
+  AR2025-005 says even 499k||499k limits the voltage and causes instability at 360 MHz.
+  Likely makes the chip marginal at 360 MHz; autoload's extra traffic may be what tips it.
+
+### Finding 3: internal DMA RAM is ~20 KB from aborting
+- Steady state: DMA-capable internal free 23 KB, largest 16 KB. A build using ~19 KB more
+  internal RAM (coredump-to-flash) boot-looped: USB HID claim (256 B, DMA|INTERNAL) failed
+  with largest block 544 B -> ESP_ERROR_CHECK abort in usb_hid.c; the SD driver's bounce
+  buffer failed the same way. Profiling/experiment builds that put buffers in SRAM can hit this.
+
+### Not reproduced: black flashes
+- No DSI underrun, no black frames, no LT8912B input loss, no band-copy timeout in ~45 min of
+  logging. The probes stay in the diagnostics build for when it happens.
+
+### Changes kept (clean config, no diagnostics)
+- CONFIG_QUAKE_L2_AUTOLOAD now defaults to **off** (Kconfig); vid_null.c only configures
+  autoload when it is enabled.
+- CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y (sdkconfig.defaults): the USB host's DMA
+  buffers live in PSRAM. Tiny traffic (HID reports, descriptor lists); the driver syncs the
+  cache per transfer either way.
+- usb_hid.c: a HID device that fails to open/start is logged and skipped instead of
+  aborting (ESP_ERROR_CHECK rebooted the board); set_protocol/set_idle failures are warnings.
+- Result: **51.88 fps** (519 frames / 10.00 s; -1.3% vs 52.57 with autoload). Internal RAM
+  free 33.3 -> **41.4 KB**, largest block 19 -> **32 KB**. All 7 HID interfaces (keyboard +
+  mouse) enumerate. 4 min of play after the benchmark: no faults.
+- partitions.csv gains a 1 MB `coredump` partition (unused unless coredump-to-flash is
+  enabled, which costs ~19 KB internal RAM).

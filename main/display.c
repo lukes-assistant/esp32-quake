@@ -30,6 +30,7 @@
 #include "font_8x16.h"
 #include "driver/ppa.h"
 #include "profile.h"
+#include "stability.h"
 
 #include "quakedef.h"
 
@@ -97,6 +98,7 @@ void QG_DrawFrame(void *pixels) {
 	profile_frame();
 	if (profile_screenshot_due()) screenshot_dump(pixels);
 	cur_pixels=pixels;
+	stability_present();
 	xSemaphoreGive(drawing_mux);
 	xTaskNotifyGive(draw_task_handle);
 	fps_ticks++;
@@ -219,8 +221,10 @@ static void draw_task(void *param) {
 				load_clut(clut_pal);
 			}
 			ESP_ERROR_CHECK(convert_ppa(cur_pixels, lcdbuf[cur_buf]));
+			stability_check_frame(cur_pixels, clut_pal);
 		} else {
 			convert_cpu(cur_pixels, lcdbuf[cur_buf], pal888);
+			stability_check_frame(cur_pixels, pal888);
 		}
 		xSemaphoreGive(drawing_mux);
 		profile_display_times(esp_timer_get_time()-start_us, 0);

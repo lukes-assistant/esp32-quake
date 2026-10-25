@@ -39,3 +39,7 @@ CONFIG_BSP_LCD_COLOR_FORMAT_RGB888=y
 
 # ESP32-P4 chip revision v1.0 on this board; IDF v5.5 defaults to rev >= v3.0
 CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+
+# USB host DMA buffers (descriptor lists, transfer buffers) in PSRAM: internal DMA-capable RAM
+# is nearly exhausted, and HID enumeration failed with ESP_ERR_NO_MEM when it ran out
+CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y

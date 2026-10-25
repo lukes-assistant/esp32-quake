@@ -32,6 +32,7 @@
 #include "input.h"
 #include "display.h"
 #include "profile.h"
+#include "stability.h"
 
 #include "quakedef.h"
 
@@ -58,6 +59,7 @@ static void quake_task(void *param) {
 		// Run the frame at the correct duration.
 		int64_t newtime_us = esp_timer_get_time();
 		QG_Tick((double)(newtime_us - oldtime_us)/1000000.0);
+		stability_game_tick();
 		oldtime_us = newtime_us;
 	}
 }
@@ -95,12 +97,14 @@ static void sdcard_mount(void) {
 void membench_run(const char *when);
 
 void app_main() {
+	stability_boot_report();
 	board_init();
 	QG_CopyInit();
 	membench_run("idle bus (before the display starts)");
 	profile_init();
 	sdcard_mount();
 	display_init();
+	stability_init();
 	membench_run("HDMI 640x480@60 scan-out running");
 
 	ethernet_connect();

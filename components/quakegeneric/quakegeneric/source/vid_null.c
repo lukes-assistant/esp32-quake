@@ -27,6 +27,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakegeneric.h"
 #include "esp_heap_caps.h"
 #include "esp32p4/rom/cache.h"
+#include "sdkconfig.h"
 
 viddef_t	vid;				// global video state
 
@@ -101,9 +102,15 @@ void	VID_Init (unsigned char *palette)
 			.addr1 = hk_a0,
 			.size1 = hk_a1 - hk_a0,
 		};
+#if CONFIG_QUAKE_L2_AUTOLOAD
 		Cache_Disable_L2_Cache_Autoload ();
 		Cache_Config_L2_Cache_Autoload (&al_cfg);
 		Cache_Enable_L2_Cache_Autoload ();
+#else
+		(void)al_cfg;
+		printf ("L2 autoload DISABLED (CONFIG_QUAKE_L2_AUTOLOAD)\n");
+		if (0)
+#endif
 		printf ("L2 autoload enabled on surfcache (0x%08lx..0x%08lx, %lu KB) + hunk (0x%08lx..0x%08lx, %lu KB)\n",
 				(unsigned long)sc_a0, (unsigned long)sc_a1, (unsigned long)((sc_a1 - sc_a0) / 1024),
 				(unsigned long)hk_a0, (unsigned long)hk_a1, (unsigned long)((hk_a1 - hk_a0) / 1024));
