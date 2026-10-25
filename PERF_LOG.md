@@ -811,3 +811,34 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   claimed earlier, so it is running or done: no deadlock.
 - 48.73 fps (no cost). 4 minutes through all demos: no faults.
 
+### Experiment: reuse a surface's first job of the frame in later band flushes
+- D_JobAddLike clones the job (block, gradients) instead of redoing cache lookup, mip level
+  and gradients per band (checking the block still belongs to the surface).
+- **48.79 fps (no gain vs 48.84)**. Reverted.
+
+### Diagnostic: how much time is spent waiting? (HP core counters mcycle / minstret)
+- The HP cores have mcycle, minstret, branch-mispredict, branch and store counters (no
+  memory-wait counter; only the LP core has one). On this in-order single-issue core, cycles
+  that retire no instruction are mostly memory waits (cache misses to PSRAM, plus L1 load-use
+  hazards), with some multiply/FP-divide latency; mispredicts are measured separately.
+  mcycle also counts while idle in WFI.
+- 10 s window at 48.5 fps:
+
+  | | cycles | instructions | IPC | non-retiring | mispredicts |
+  |---|---|---|---|---|---|
+  | core 0 | 3607 M | 1884 M | 0.52 | 48% (idle ~2%) | 20 M (~1.7% of cycles) |
+  | core 1 | 3609 M | 1815 M | 0.50 | 50% (idle ~16%) | 14 M |
+
+  | per function (both cores) | Mcycles/s | IPC | non-retiring |
+  |---|---|---|---|
+  | world spans (D_DrawSpans8Job) | 116 + 132 | 0.67-0.69 | 31-33% |
+  | surface builds | 26 + 30 | 0.64 | 36% |
+  | world z fill | 10 + 14 | 0.45 | 55% |
+  | alias models (core 1) | 84 | 0.54 | 46% |
+  | rest of core 0 (BSP, edges, game, sound), by subtraction | ~200 | ~0.44 | ~56% |
+
+- So roughly 44% of core 0's time and ~39% of core 1's busy time is spent waiting. The spans
+  (now writing to SRAM bands) are the least stall-bound; the serial core-0 code (BSP walk,
+  edge sorting, client) is the most: ~1.1 G stalled cycles per 10 s, ~31% of core 0. It walks
+  the world model (nodes, planes, msurfaces, edges, vertexes) in PSRAM.
+
