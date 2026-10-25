@@ -54,7 +54,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 
 // provided functions
-void QG_Tick(double duration);
+void QG_Tick(float duration);
 void QG_Create(int argc, char *argv[]);
 
 // user must implement these

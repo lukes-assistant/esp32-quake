@@ -107,7 +107,7 @@ void QG_DrawFrame(void *pixels) {
 		int64_t fpstime=(newtime_us-start_time_fps_meas)/fps_ticks;
 		fps_ticks=0;
 		start_time_fps_meas = newtime_us;
-		printf("Fps: %02f\n", 1000000.0/fpstime);
+		printf("Fps: %02f\n", 1e6f/(float)fpstime);
 	}
 }
 

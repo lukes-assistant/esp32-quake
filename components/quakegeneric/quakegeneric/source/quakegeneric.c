@@ -20,7 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-void QG_Tick(double duration)
+void QG_Tick(float duration)
 {
 	Host_Frame(duration);
 }

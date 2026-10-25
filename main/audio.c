@@ -46,13 +46,13 @@ void audio_task(void *param) {
 	int16_t *mix_buf=calloc(CHUNKSZ/2, sizeof(int16_t));
 	int old_volume=-1;
 	while(1) {
-		int mainvolume = (int)(volume.value * 100.0);
+		int mainvolume = (int)(volume.value * 100.0f);
 		if (mainvolume!=old_volume) {
 			esp_codec_dev_set_out_vol(spk_codec_dev, mainvolume);
 			old_volume=mainvolume;
-			printf("Set volume %f\n", mainvolume);
+			printf("Set volume %d\n", mainvolume);
 		}
-		int cdvol = (int)(bgmvolume.value * 255.0);
+		int cdvol = (int)(bgmvolume.value * 255.0f);
 
 		CDAudio_get_samps((char*)mix_buf, CHUNKSZ);
 		int16_t *digaudio=(int16_t*)&dma_buffer[dma_rpos];

@@ -351,7 +351,7 @@ int Q_atoi (char *str)
 
 float Q_atof (char *str)
 {
-	double			val;
+	float			val;
 	int             sign;
 	int             c;
 	int             decimal, total;

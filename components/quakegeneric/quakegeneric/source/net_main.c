@@ -46,7 +46,7 @@ static qboolean	listening = false;
 qboolean	slistInProgress = false;
 qboolean	slistSilent = false;
 qboolean	slistLocal = true;
-static double	slistStartTime;
+static float	slistStartTime;
 static int		slistLastShown;
 
 static void Slist_Send(void);
@@ -90,9 +90,9 @@ qboolean recording = false;
 int	net_driverlevel;
 
 
-double			net_time;
+float			net_time;
 
-double SetNetTime(void)
+float SetNetTime(void)
 {
 	net_time = Sys_FloatTime();
 	return net_time;
@@ -450,7 +450,7 @@ NET_CheckNewConnections
 
 struct
 {
-	double		time;
+	float		time;
 	int			op;
 	intptr_t	session;
 } vcrConnect;
@@ -529,7 +529,7 @@ returns -1 if connection is invalid
 
 struct
 {
-	double		time;
+	float		time;
 	int			op;
 	intptr_t	session;
 	int			ret;
@@ -617,7 +617,7 @@ returns -1 if the connection died
 */
 struct
 {
-	double		time;
+	float		time;
 	int			op;
 	intptr_t	session;
 	int			r;
@@ -722,7 +722,7 @@ qboolean NET_CanSendMessage (qsocket_t *sock)
 
 int NET_SendToAll(sizebuf_t *data, int blocktime)
 {
-	double		start;
+	float		start;
 	int			i;
 	int			count = 0;
 	qboolean	state1 [MAX_SCOREBOARD];
@@ -956,7 +956,7 @@ void NET_Poll(void)
 }
 
 
-void SchedulePollProcedure(PollProcedure *proc, double timeOffset)
+void SchedulePollProcedure(PollProcedure *proc, float timeOffset)
 {
 	PollProcedure *pp, *prev;
 

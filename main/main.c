@@ -58,7 +58,7 @@ static void quake_task(void *param) {
 	while (1) {
 		// Run the frame at the correct duration.
 		int64_t newtime_us = esp_timer_get_time();
-		QG_Tick((double)(newtime_us - oldtime_us)/1000000.0);
+		QG_Tick((float)(newtime_us - oldtime_us)*1e-6f);
 		stability_game_tick();
 		oldtime_us = newtime_us;
 	}

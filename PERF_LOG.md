@@ -1127,3 +1127,20 @@ earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach,
   mouse) enumerate. 4 min of play after the benchmark: no faults.
 - partitions.csv gains a 1 MB `coredump` partition (unused unless coredump-to-flash is
   enabled, which costs ~19 KB internal RAM).
+
+### Experiment: single precision everywhere (no soft-float doubles in play)
+- ISA (readelf Tag_RISCV_arch): rv32imafc + zicsr/zifencei/zmmul/zaamo/zalrsc + xesppie. F only:
+  no D (every double op is a libgcc call: __adddf3, __ltdf2, ...) and no Zfh/Zfhmin, so float16
+  would be software too (xesppie SIMD is integer). float32 is the only hardware float.
+- Every `double` in the built engine sources is now `float` (host/client/server/net time,
+  QG_Tick). Host_FilterTime accumulates the time since the last frame instead of subtracting two
+  absolute times, so frame timing stays exact at any uptime (realtime as a float loses ~1 ms
+  resolution only after ~4.6 h, and is just a label for the console/net timeouts).
+  cl.time/sv.time restart with each map.
+- ceilf -> Q_ceil_int (mathlib.h, one fcvt.w.s rup) in alias gradients (D_PolysetCalcGradients,
+  both cores), sprite scan edges and R_EmitEdge. FloorDivMod uses integer division (its
+  arguments are always whole numbers). Invert24To16 (unused) made exact with integer math.
+- tan -> tanf (CalcFov); main/: audio volume, benchmark and fps-print constants made float
+  (main/ isn't built with -fsingle-precision-constant). Fixed `printf("%f", int)` in audio.c.
+- Remaining double code in play: only __extendsfdf2 for float arguments to printf/Sys_Error.
+- **52.33 fps (+0.9% vs 51.88)** (524 frames / 10.01 s). Kept.

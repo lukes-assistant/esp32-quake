@@ -70,12 +70,7 @@ int				r_ceilv1;
 
 qboolean	r_lastvertvalid;
 
-static inline int R_FastCeilF (float x)
-{
-	int r;
-	__asm__ ("fcvt.w.s %0, %1, rup" : "=r"(r) : "f"(x));
-	return r;
-}
+#define R_FastCeilF Q_ceil_int
 
 /*
 ================

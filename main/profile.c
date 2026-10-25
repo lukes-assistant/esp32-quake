@@ -219,7 +219,7 @@ void profile_frame() {
 		return;
 	}
 	win_frames++;
-	float seconds=(esp_timer_get_time()-win_start_us)/1000000.0;
+	float seconds=(float)(esp_timer_get_time()-win_start_us)*1e-6f;
 	if (seconds>=CONFIG_QUAKE_BENCHMARK_SECONDS) {
 		window_end("attract demo", win_frames, seconds);
 		bench_state=0;

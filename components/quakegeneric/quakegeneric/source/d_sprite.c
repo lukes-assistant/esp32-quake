@@ -209,14 +209,14 @@ void D_SpriteScanLeftEdge (void)
 	if (lmaxindex == 0)
 		lmaxindex = r_spritedesc.nump;
 
-	vtop = ceilf (r_spritedesc.pverts[i].v);
+	vtop = (float)Q_ceil_int (r_spritedesc.pverts[i].v);
 
 	do
 	{
 		pvert = &r_spritedesc.pverts[i];
 		pnext = pvert - 1;
 
-		vbottom = ceilf (pnext->v);
+		vbottom = (float)Q_ceil_int (pnext->v);
 
 		if (vtop < vbottom)
 		{
@@ -271,7 +271,7 @@ void D_SpriteScanRightEdge (void)
 	if (vvert > r_refdef.fvrectbottom_adj)
 		vvert = r_refdef.fvrectbottom_adj;
 
-	vtop = ceilf (vvert);
+	vtop = (float)Q_ceil_int (vvert);
 
 	do
 	{
@@ -284,7 +284,7 @@ void D_SpriteScanRightEdge (void)
 		if (vnext > r_refdef.fvrectbottom_adj)
 			vnext = r_refdef.fvrectbottom_adj;
 
-		vbottom = ceilf (vnext);
+		vbottom = (float)Q_ceil_int (vnext);
 
 		if (vtop < vbottom)
 		{
@@ -414,8 +414,8 @@ void D_DrawSprite (void)
 		pverts++;
 	}
 
-	ymin = ceilf (ymin);
-	ymax = ceilf (ymax);
+	ymin = (float)Q_ceil_int (ymin);
+	ymax = (float)Q_ceil_int (ymax);
 
 	if (ymin >= ymax)
 		return;		// doesn't cross any scans at all

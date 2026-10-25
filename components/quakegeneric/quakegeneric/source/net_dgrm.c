@@ -1198,7 +1198,7 @@ static qsocket_t *_Datagram_Connect (char *host)
 	int			newsock;
 	int			ret;
 	int			reps;
-	double		start_time;
+	float		start_time;
 	int			control;
 	char		*reason;
 

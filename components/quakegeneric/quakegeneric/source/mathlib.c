@@ -484,38 +484,24 @@ quotient must fit in 32 bits.
 void FloorDivMod (float numer, float denom, int *quotient,
 		int *rem)
 {
-	int		q, r;
-	float	x;
+	int		n, d, q, r;
+
+	// (ESP32-P4 port: the arguments are always whole numbers, so integer division gives
+	// the same result without the float divide and floorf calls)
+	n = (int)numer;
+	d = (int)denom;
 
 #ifndef PARANOID
-	if (denom <= 0.0)
-		Sys_Error ("FloorDivMod: bad denominator %d\n", denom);
-
-//	if ((floor(numer) != numer) || (floor(denom) != denom))
-//		Sys_Error ("FloorDivMod: non-integer numer or denom %f %f\n",
-//				numer, denom);
+	if (d <= 0)
+		Sys_Error ("FloorDivMod: bad denominator %d\n", d);
 #endif
 
-	if (numer >= 0.0)
-	{
-
-		x = floorf(numer / denom);
-		q = (int)x;
-		r = (int)floorf(numer - (x * denom));
-	}
-	else
-	{
-	//
-	// perform operations with positive values, and fix mod to make floor-based
-	//
-		x = floorf(-numer / denom);
-		q = -(int)x;
-		r = (int)floorf(-numer - (x * denom));
-		if (r != 0)
-		{
-			q--;
-			r = (int)denom - r;
-		}
+	q = n / d;
+	r = n % d;
+	if (r < 0)
+	{	// C truncates toward zero; make it floor-based
+		q--;
+		r += d;
 	}
 
 	*quotient = q;
@@ -559,6 +545,6 @@ fixed16_t Invert24To16(fixed16_t val)
 	if (val < 256)
 		return (0xFFFFFFFF);
 
-	return (fixed16_t)
-			(((double)0x10000 * (double)0x1000000 / (double)val) + 0.5);
+	// 2^40 / val, rounded (integer: a float has too few bits for a 16.16 result)
+	return (fixed16_t)((((uint64_t)1 << 40) + (uint32_t)val / 2) / (uint32_t)val);
 }

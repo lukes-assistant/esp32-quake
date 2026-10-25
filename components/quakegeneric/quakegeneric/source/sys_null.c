@@ -188,7 +188,7 @@ void Sys_Quit (void)
 	QG_Quit();
 }
 
-double Sys_FloatTime (void)
+float Sys_FloatTime (void)
 {
     struct timeval tp;
     static int      secbase; 

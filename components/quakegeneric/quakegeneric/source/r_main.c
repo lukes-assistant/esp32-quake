@@ -450,7 +450,7 @@ void R_ViewChanged (vrect_t *pvrect, int lineadj, float aspect)
 	for (i=0 ; i<4 ; i++)
 		VectorNormalize (screenedge[i].normal);
 
-	res_scale = sqrt ((double)(r_refdef.vrect.width * r_refdef.vrect.height) /
+	res_scale = sqrt ((float)(r_refdef.vrect.width * r_refdef.vrect.height) /
 			          (320.0 * 152.0)) *
 			(2.0 / r_refdef.horizontalFieldOfView);
 	r_aliastransition = r_aliastransbase.value * res_scale;

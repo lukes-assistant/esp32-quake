@@ -27,10 +27,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define cos(x)		cosf(x)
 #define atan2(y,x)	atan2f(y,x)
 #define atan(x)		atanf(x)
+#define tan(x)		tanf(x)
 #define floor(x)	floorf(x)
 #define ceil(x)		ceilf(x)
 #define fabs(x)		fabsf(x)
 #define pow(x,y)	powf(x,y)
+
+// ceil() to int in one instruction (fcvt.w.s with round-up) instead of a libm call
+static inline int Q_ceil_int (float x)
+{
+	int r;
+	__asm__ ("fcvt.w.s %0, %1, rup" : "=r"(r) : "f"(x));
+	return r;
+}
 
 typedef float vec_t;
 typedef vec_t vec3_t[3];
