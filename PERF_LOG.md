@@ -893,3 +893,8 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
 - **50.33 fps (+1% vs 49.8)**, conversion 6.5 -> 6.1 ms. Kept: verified identical output, and
   it reduces shared PSRAM traffic, which is a measured bottleneck.
 
+### Experiment: visible-surface bitset in internal RAM instead of msurface_t.visframe
+- The BSP walk stamped visframe into every surface of every visible leaf (PSRAM). A
+  660-byte bitset per frame instead: **50.39 fps (no gain vs 50.33)**; those lines are read
+  anyway. Reverted.
+
