@@ -1175,3 +1175,28 @@ earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach,
   pending-transaction storage costs internal RAM (free 42.5 -> 28.8 KB, largest 19 KB).
 - Reverted. Per-operation PPA cost makes many-small-op designs lose; the same applies to a
   per-band PPA conversion (Candidate 2, 30 bands per frame) unless it needs far fewer ops.
+
+## 2026-10-25 — Survey: PSRAM writes that could be staged in SRAM
+
+Earlier lesson (e7ce7e7): staging pays only when the CPU stalls on write-allocate fills or the
+data never needs to reach PSRAM; DMA-copying the same bytes out (world z bands) was -1%, and
+surface builds into SRAM were at most +1%.
+
+Per-frame PSRAM write streams: world pixels (already SRAM bands + DMA), world z (tried),
+surface cache builds (tried), and core 1's pipelined finish pass -- model/particle/HUD pixels
+into vid_buffer, model z, and the gun's 32-bit generation-tagged z-buffer (1.2 MB). Scratch
+arrays (alias spans[], finalverts/auxverts, r_pipe records) stay cache-resident.
+
+Profile (one 10 s run, both cores, 52.38 fps with the profiler): core 0 ~0.7% idle (paces the
+frame): D_DrawSpans8Job 36.2%, R_GenerateSpans 8.9%, R_DrawSurfaceBlock8_mip0 7.0%,
+D_DrawZSpansJob 3.3%. Core 1 9.2% idle: D_DrawSpans8Job 36.4%, D_PolysetDrawSpans8_c1 16.0%
+(of which the gun loop ~44%, hottest line the gun z test), R_DrawSurfaceBlock8_mip0_c1 5.6%,
+D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3.6%.
+
+### Diagnostic: gun drawn with no z test/write (wrong picture)
+- **53.74 fps (+2.1% vs 52.62)**: upper bound for the gun's z buffer.
+
+### Experiment: 16-bit gun z (4-bit generation + 12-bit 1/z), dirty-range clear on wrap
+- Halves the gun z bytes and cache-line misses; frees 600 KB PSRAM.
+- **52.77 fps (+0.3%, noise)**. Reverted. The gun's cost is the per-pixel z load -> compare ->
+  branch dependency, not PSRAM misses, so it's not a placement problem.
