@@ -33,6 +33,7 @@ static IRAM_ATTR bool copy_done_isr(gdma_channel_handle_t chan, gdma_event_data_
 }
 
 int QG_CopyInit(void) {
+	if (rx_list) return 1;	//already done
 	gdma_channel_alloc_config_t tx_cfg={
 		.flags.reserve_sibling=1,
 		.direction=GDMA_CHANNEL_DIRECTION_TX,

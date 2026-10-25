@@ -962,3 +962,13 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
   the CPU would otherwise wait for them (the frame buffer's write-allocate fills); it doesn't
   reduce traffic. Real gains need traffic that disappears (data that never leaves SRAM).
 
+## 2026-10-25 — Memory hierarchy benchmark and budget document
+- main/membench.c (CONFIG_QUAKE_MEMBENCH): latency (pointer chase) and bandwidth of TCM,
+  internal SRAM, PSRAM (L1/L2-resident and uncached), GDMA. Key results: L1 hit 3 cycles
+  (SRAM or PSRAM), L1 miss to SRAM or L2 hit ~12 cycles, PSRAM miss ~177 cycles (492 ns) idle /
+  ~207 (576 ns) with HDMI scan-out; TCM 4 cycles and slow writes; one core streams ~190 MB/s
+  from PSRAM; GDMA SRAM->PSRAM 138 MB/s.
+- BENCH now also prints the PSRAM heap (3.8 MB free of 30.2 MB).
+- MEMORY_AND_COMPUTE_BUDGET.md: chip/memory hierarchy (datasheet and measured), where all
+  memory is allocated, PSRAM traffic budget, per-code-area time per frame on both cores.
+

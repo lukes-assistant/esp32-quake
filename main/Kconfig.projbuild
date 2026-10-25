@@ -11,6 +11,15 @@ menu "Quake"
             no input and does not change what the game does. A timedemo produces the
             same report when it finishes.
 
+    config QUAKE_MEMBENCH
+        bool "Run a memory hierarchy benchmark at boot"
+        default n
+        help
+            Measures load latency and read/write/memcpy bandwidth of the TCM, internal SRAM
+            and PSRAM (L1-, L2-resident and uncached sizes) and GDMA copy throughput, once
+            before the display starts and once with HDMI scan-out running. Prints MEMBENCH
+            lines. Adds a few seconds to boot.
+
     config QUAKE_SCREENSHOTS
         int "After the benchmark, dump N screenshots on the console (0 = off)"
         default 0

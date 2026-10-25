@@ -92,11 +92,16 @@ static void sdcard_mount(void) {
 	if (err!=ESP_OK) printf("SD card mount failed: %s\n", esp_err_to_name(err));
 }
 
+void membench_run(const char *when);
+
 void app_main() {
 	board_init();
+	QG_CopyInit();
+	membench_run("idle bus (before the display starts)");
 	profile_init();
 	sdcard_mount();
 	display_init();
+	membench_run("HDMI 640x480@60 scan-out running");
 
 	ethernet_connect();
 

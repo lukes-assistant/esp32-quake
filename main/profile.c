@@ -190,6 +190,9 @@ static void window_end(const char *what, int frames, float seconds) {
 	printf("BENCH internal RAM free %u bytes, largest block %u bytes\n",
 			heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
 			heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+	printf("BENCH PSRAM heap free %u bytes of %u, largest block %u bytes\n",
+			heap_caps_get_free_size(MALLOC_CAP_SPIRAM), heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
+			heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 #if CONFIG_QUAKE_PROFILE
 	dump_samples();
 #endif
