@@ -331,3 +331,27 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 - **23.36 fps (+14% vs 20.45)**. Core 1 is now close to saturated: palette convert takes
   26.9 ms of wall time (preempted by the job worker); the game waits 0.37 ms/frame for it.
 
+### Diagnostic: palette conversion skipped on core 1 (screen frozen for that run)
+- **28.25 fps (+21% vs 23.36)**: core 1's 15.6 ms/frame RGB888 conversion is now the main
+  limiter of the shared span drawing. Worth moving off the CPU (PPA blend unit has CLUT/L8
+  hardware on hw_ver1; IDF's driver has it commented out, register value 4 for L8) or
+  making much cheaper.
+
+### Experiment: palette conversion reading 32-bit source words, 8 pixels per iteration
+- **23.37 fps (no change)**; convert time unchanged. The loop is memory-bound. Reverted.
+
+### Experiment: palette conversion in the PPA blending engine (L8 + CLUT), with self-test
+- The PPA blender has CLUT hardware on hw_ver1; ESP-IDF 5.5's driver has L8 commented out.
+  Copied esp_driver_ppa into components/ (overrides IDF's; needs `idf.py reconfigure` the
+  first time) and patched it: allow L8 as the background colour mode (register value 4),
+  plus ppa_blend_set_bg_clut() to load the 256-entry ARGB palette (CLUT RAM at PPA base +
+  0x400 in memory-access mode).
+- display.c: blend with bg = the 8-bit frame as L8, fg = same buffer as A8 with alpha fixed
+  at 0, out = RGB888 into the LCD frame buffer. The palette is snapshotted and the CLUT
+  reloaded only when the palette changed.
+- Startup self-test converts a test pattern with the PPA and compares it with the CPU
+  conversion (±1 per channel allowed); on any mismatch it falls back to the CPU. Result:
+  **0 bad bytes** (bit-exact), "Palette conversion: PPA (hardware CLUT)".
+- **26.46 fps (+13% vs 23.36)**. Conversion now 7.4 ms in hardware; core 1 is free for
+  span jobs meanwhile.
+
