@@ -120,5 +120,9 @@ void D_JobsEndFrame (void);
 void D_JobsWaitAll (void);
 void D_JobsWakeWorker (void);
 void D_SetZBuffer (short *zbuffer);
+// d_polyse.c: the view model's own z-buffer
+extern qboolean	d_alias_gunz;
+extern unsigned	*d_gunzbuffer;
+void D_PolysetGunBegin (void);
 surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds);
 

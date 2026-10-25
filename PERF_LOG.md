@@ -753,3 +753,15 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   (input latency, possible music dropouts). Both block on events/ring buffers; raised to 7.
   45.25 fps.
 
+### Experiment: span tail steps via a float reciprocal table instead of two integer divisions
+- **45.36 fps (+0.2%, noise)**: the divisions aren't a significant cost. Reverted.
+
+### Experiment: view model with its own generation-tagged z-buffer, drawn in front of everything
+- The gun's box is no longer z-filled by the world. The gun is drawn last (after the other
+  models, particles and sprites; GLQuake semantics) and depth-tests only against itself, in
+  a separate 32-bit z-buffer: entry = generation << 16 | z, a new generation per gun draw, so
+  entries from earlier frames always compare as farther and the buffer is never cleared
+  (except on wrap, every 65535 frames). Only gun pixels touch it. 1.2 MB PSRAM.
+- Screenshots: gun, models and particles correct. 4 minutes through all demos: no faults.
+- **46.49 fps (+2.7% vs 45.25)**. Kept.
+

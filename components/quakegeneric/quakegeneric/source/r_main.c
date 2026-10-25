@@ -1033,6 +1033,18 @@ static qboolean R_ViewModelLighting (alight_t *lighting, float *lightvec)
 	return true;
 }
 
+static aliasitem_t	r_gunitem;
+static qboolean		r_gunitem_valid;
+
+// frames not deferred to core 1: the view model, after particles (d_polyse.c)
+static void R_DrawViewModelItem (void)
+{
+	if (!r_gunitem_valid)
+		return;
+	r_gunitem_valid = false;
+	R_DrawAliasItems (&r_gunitem, 1);
+}
+
 void R_DrawEntitiesAndViewModel (void)
 {
 	static EXT_RAM_BSS_ATTR aliasitem_t	items[MAX_VISEDICTS + 1];
@@ -1077,8 +1089,16 @@ void R_DrawEntitiesAndViewModel (void)
 	if (count && deferred)
 	{
 		R_PipeAddAlias (items, count);	// all drawn by core 1 later (r_pipe.c)
+		count = 0;
 	}
-	else if (count)
+	// the view model is drawn last, in front of everything (R_DrawViewModelItem)
+	r_gunitem_valid = count && items[count - 1].viewmodel;
+	if (r_gunitem_valid)
+	{
+		r_gunitem = items[count - 1];
+		count--;
+	}
+	if (count)
 	{
 	// left half of the columns on core 0, right half on core 1
 		refdef_c1 = r_refdef;
@@ -1185,6 +1205,7 @@ SetVisibilityByPassages ();
 	}
 
 	R_DrawParticles ();
+	R_DrawViewModelItem ();
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();

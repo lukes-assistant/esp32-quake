@@ -305,11 +305,7 @@ void R_ComputeZRows (void)
 			R_ZRowsAddEntity (cl_visedicts[i]);
 		}
 	}
-	if (r_drawviewmodel.value && !r_fov_greater_than_90 &&
-		!(cl.items & IT_INVISIBILITY) && cl.stats[STAT_HEALTH] > 0 &&
-		cl.viewent.model)
-	{
-		R_ZRowsAddEntity (&cl.viewent);
-	}
+// (not the view model: it has its own z-buffer and is drawn in front of everything, see
+// D_PolysetDrawSpans8Gun)
 	R_ZRowsAddParticles ();
 }

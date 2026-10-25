@@ -9,6 +9,9 @@ and Mod_Extradata (core 1 must not touch the model cache LRU; it gets a read-onl
 
 #include "view_c1_names.h"
 
+#define ALIAS_C1	1	// (d_polyse.c: shared view-model z-buffer state is defined by core 0's copy)
+#define d_alias_gunz                         d_alias_gunz_c1
+
 #define acolormap                            acolormap_c1
 #define aliastransform                       aliastransform_c1
 #define a_skinwidth                          a_skinwidth_c1

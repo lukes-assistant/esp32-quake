@@ -389,9 +389,12 @@ void R_PipeRun (void)
 
 	if (f->deferred3d)
 	{
+		int		n = f->numaliases;
+		qboolean	gun = n && f->aliases[n - 1].viewmodel;	// always the last item
+
 		R_PipeApplyView (&f->view);
-		if (f->numaliases)
-			R_DrawAliasItems_c1 (f->aliases, f->numaliases);
+		if (n - gun)
+			R_DrawAliasItems_c1 (f->aliases, n - gun);
 		memset (&p, 0, sizeof(p));
 		for (i = 0 ; i < f->numparticles ; i++)
 		{
@@ -399,6 +402,8 @@ void R_PipeRun (void)
 			p.color = f->particles[i].color;
 			D_DrawParticle_c1 (&p);
 		}
+		if (gun)	// in front of everything (d_polyse.c)
+			R_DrawAliasItems_c1 (&f->aliases[n - 1], 1);
 	}
 	for (i = 0 ; i < f->numcmds ; i++)
 		Draw_Exec (f->buffer, &f->cmds[i]);

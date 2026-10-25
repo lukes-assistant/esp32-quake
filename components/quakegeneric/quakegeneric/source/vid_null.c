@@ -63,6 +63,7 @@ void	VID_Init (unsigned char *palette)
 	vid_buffer[0] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
 	vid_buffer[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
 	vid_buffer[2] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
+	d_gunzbuffer = calloc(BASEWIDTH*BASEHEIGHT, sizeof(unsigned));	// view model (d_polyse.c)
 	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
 	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
 	// pixel aspect for the shape the image is displayed at (1.0 = square pixels)
