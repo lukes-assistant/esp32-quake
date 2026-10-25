@@ -47,6 +47,8 @@ typedef struct surfcache_s
 	struct texture_s	*texture;	// checked for animating textures
 	int					usedframe;	// r_framecount when last used (d_jobs.c may still use it)
 	unsigned			dlightkey;	// hash of the dynamic lights it was built with
+	int					buildframe;	// r_framecount when a job was queued to build it, and
+	int					buildjob;	//  that job: later jobs drawing from it wait for it
 	byte				data[4];	// width*height elements
 } surfcache_t;
 
@@ -113,7 +115,7 @@ void R_ComputeZRows (void);
 void D_JobsBeginFrame (void);
 int D_JobsCount (void);
 qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
-		qboolean color, qboolean needbuild, const drawsurf_t *ds);
+		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob);
 void D_JobsPublished (void);
 void D_JobsWaitRange (int first, int last);
 void D_JobsEndFrame (void);

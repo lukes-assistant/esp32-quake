@@ -180,6 +180,7 @@ void D_DrawSurfaces (void)
 	vec3_t			local_modelorg;
 	qboolean		needbuild;
 	drawsurf_t		ds;
+	int				waitjob;
 
 	currententity = &cl_entities[0];
 	TransformVector (modelorg, transformed_modelorg);
@@ -224,7 +225,7 @@ void D_DrawSurfaces (void)
 				}
 
 				D_DrawSkyScans8 (s->spans);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWBACKGROUND)
@@ -236,7 +237,7 @@ void D_DrawSurfaces (void)
 				d_ziorigin = -0.9;
 
 				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWTURB)
@@ -264,7 +265,7 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 				Turbulent8 (s->spans);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
 					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
@@ -305,6 +306,8 @@ void D_DrawSurfaces (void)
 
 			// the surface-cache block is drawn on core 1 (d_jobs.c) unless the queue is full
 				pcurrentcache = D_CacheSurfaceDeferred (pface, miplevel, &needbuild, &ds);
+				waitjob = (!needbuild && pcurrentcache->buildframe == r_framecount) ?
+						pcurrentcache->buildjob : -1;
 
 				cacheblock = (pixel_t *)pcurrentcache->data;
 				cachewidth = pcurrentcache->width;
@@ -312,15 +315,23 @@ void D_DrawSurfaces (void)
 				D_CalcGradients (pface);
 
 				if (d_drawspans != D_DrawSpans8 ||
-					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds))
+					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds, waitjob))
 				{
 					if (needbuild)
 					{
 						r_drawsurf = ds;
 						R_DrawSurface ();
+						pcurrentcache->buildframe = -1;
 					}
+					else if (waitjob >= 0)
+						D_JobsWaitRange (waitjob, waitjob + 1);
 					(*d_drawspans) (s->spans);
 					D_DrawZSpans (s->spans);
+				}
+				else if (needbuild)
+				{
+					pcurrentcache->buildframe = r_framecount;
+					pcurrentcache->buildjob = D_JobsCount () - 1;
 				}
 
 				if (s->insubmodel)

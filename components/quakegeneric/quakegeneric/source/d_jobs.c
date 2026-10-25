@@ -44,6 +44,7 @@ typedef struct
 	qboolean	needbuild;	// build the surface-cache block first, using ds
 	pixel_t		*cacheblock;
 	pixel_t		*viewbuffer;	// d_viewbuffer when queued (a band buffer, r_edge.c)
+	int			waitjob;		// >= 0: the job building the surface-cache block, wait for it
 	int			cachewidth;
 	float		sdivzorigin, sdivzstepu, sdivzstepv;
 	float		tdivzorigin, tdivzstepu, tdivzstepv;
@@ -326,7 +327,14 @@ static void D_RunJob (job_t *job, int core)
 		}
 	}
 	if (job->color)
+	{
+		// the block may still be being built by an earlier job (a surface spans several
+		// flushes); that job was claimed before this one, so it is running or done
+		if (job->waitjob >= 0)
+			while (__atomic_load_n (&jobdone[job->waitjob], __ATOMIC_ACQUIRE) != frame_gen)
+				;
 		D_DrawSpans8Job (job);
+	}
 	D_DrawZSpansJob (job);
 }
 
@@ -452,7 +460,7 @@ by *ds first if needbuild. Returns false if no frame is active or the queue is f
 which case the caller draws the surface itself.
 */
 qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
-		qboolean color, qboolean needbuild, const drawsurf_t *ds)
+		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob)
 {
 	job_t	*job;
 
@@ -465,6 +473,7 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 	job->zistepv = zistepv;
 	job->color = color;
 	job->needbuild = needbuild;
+	job->waitjob = waitjob;
 	if (color)
 	{
 		job->cacheblock = cacheblock;

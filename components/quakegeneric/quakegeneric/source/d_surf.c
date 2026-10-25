@@ -213,6 +213,7 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		new->height = (size - sizeof(*new) + sizeof(new->data)) / width;
 
 	new->owner = NULL;              // should be set properly after return
+	new->buildframe = -1;
 
 	if (d_roverwrapped)
 	{

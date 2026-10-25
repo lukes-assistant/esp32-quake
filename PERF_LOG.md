@@ -801,3 +801,13 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
 - **48.84-48.89 fps (+5.1% vs 46.49)**. Screenshots correct (no seams). 4 minutes through all
   demos: no faults, no copy timeouts. Internal RAM free 44.6 KB (largest block 31 KB).
 
+### Fix: span jobs could read a surface-cache block while another job was still building it
+- D_CacheSurfaceDeferred marks the block valid when it queues the build; a later flush in
+  the same frame (the surface continues in the next band, or after a span-buffer flush) got
+  needbuild = false and queued spans from the block, which the other core could draw while
+  the build job was still running: a frame of half-built texels. With 27 band flushes per
+  frame this got much more likely. Blocks now remember the job that builds them this frame;
+  later span jobs for the block (and the synchronous fallback) wait for that job first. It was
+  claimed earlier, so it is running or done: no deadlock.
+- 48.73 fps (no cost). 4 minutes through all demos: no faults.
+
