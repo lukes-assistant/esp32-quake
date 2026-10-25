@@ -947,3 +947,18 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
 - Earlier results affected (they were measuring this, not what they intended): the 32 KB SRAM
   texture diagnostic, the 19 fps span micro-benchmark run, the 48 KB build-scratch diagnostic.
 
+### Diagnostic (corrected, after the LP RAM fix): surface builds into SRAM
+- Builds write a 40 KB SRAM scratch instead of their PSRAM block (wrong texels):
+  **50.44 fps (+1% vs 49.95)**. With dynamic-light reuse there are only ~16 builds per frame
+  now; an SRAM tier for builds isn't worth it.
+
+### Experiment: world z in SRAM bands, copied out by DMA with the pixels
+- Two 16-row z bands (40 KB SRAM); jobs remember their z band; each band's used row ranges
+  (d_zrowmin..max widened to 128-byte lines) go out in the same GDMA transfer as the pixels
+  (multi-segment link list, QG_CopyStartMulti). Screenshots correct (models occluded by walls).
+- **49.42 fps (-1% vs 49.95)**. Reverted. The CPU no longer stalls on z writes, but the same
+  (slightly more) data still goes to PSRAM: the shared PSRAM bandwidth, not the CPU's write
+  latency, is what costs. Lesson for the memory plan: moving PSRAM writes to DMA only pays when
+  the CPU would otherwise wait for them (the frame buffer's write-allocate fills); it doesn't
+  reduce traffic. Real gains need traffic that disappears (data that never leaves SRAM).
+
