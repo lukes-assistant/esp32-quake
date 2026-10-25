@@ -468,3 +468,11 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   than from PSRAM via the L1 instruction cache (hot loops already hit the I-cache), possibly
   also contended between the two cores. Reverted.
 
+### Experiment: local copies of globals in D_PolysetDrawSpans8 (alias model spans)
+- acolormap, r_zistepx, r_lstepx, a_*step*, skinwidth copied to locals (byte stores could
+  alias them, forcing reloads every pixel). Bit-exact.
+- **35.06 fps (+1.5% vs 34.54)**. Kept.
+
+### Experiment: alias span packages (D_PolysetDraw's spans[]) back in internal SRAM
+- **35.02 fps (no gain)** for 33 KB of internal RAM. Reverted (stays in PSRAM).
+

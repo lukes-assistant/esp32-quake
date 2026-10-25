@@ -596,6 +596,12 @@ void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 	int		llight;
 	int		lzi;
 	short	*lpz;
+	// locals: the byte stores below could alias these globals, so GCC would reload them
+	// on every pixel
+	const byte	*colormap = (const byte *)acolormap;
+	const int	zistepx = r_zistepx, lstepx = r_lstepx;
+	const int	ststepxwhole = a_ststepxwhole, sstepxfrac = a_sstepxfrac;
+	const int	tstepxfrac = a_tstepxfrac, skinwidth = r_affinetridesc.skinwidth;
 
 	do
 	{
@@ -626,22 +632,22 @@ void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 			{
 				if ((lzi >> 16) >= *lpz)
 				{
-					*lpdest = ((byte *)acolormap)[*lptex + (llight & 0xFF00)];
+					*lpdest = colormap[*lptex + (llight & 0xFF00)];
 // gel mapping					*lpdest = gelmap[*lpdest];
 					*lpz = lzi >> 16;
 				}
 				lpdest++;
-				lzi += r_zistepx;
+				lzi += zistepx;
 				lpz++;
-				llight += r_lstepx;
-				lptex += a_ststepxwhole;
-				lsfrac += a_sstepxfrac;
+				llight += lstepx;
+				lptex += ststepxwhole;
+				lsfrac += sstepxfrac;
 				lptex += lsfrac >> 16;
 				lsfrac &= 0xFFFF;
-				ltfrac += a_tstepxfrac;
+				ltfrac += tstepxfrac;
 				if (ltfrac & 0x10000)
 				{
-					lptex += r_affinetridesc.skinwidth;
+					lptex += skinwidth;
 					ltfrac &= 0xFFFF;
 				}
 			} while (--lcount);
