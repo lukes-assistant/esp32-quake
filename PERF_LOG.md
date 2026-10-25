@@ -855,3 +855,41 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   4 minutes through all demos: no faults.
 - **49.75-49.88 fps (+2.1% vs 48.84)**. Kept.
 
+### Experiment: core 1 culls and lights the alias models (core 0 only records them)
+- **49.90 fps (+0.2%, noise)**. Profile of core 0's entity+particle phases: only ~3% of the
+  frame now (RecursiveLightPoint 0.6%). Reverted.
+
+### Diagnostic: world model sizes (e1m3)
+- nodes 118 KB, planes 55 KB, leafs 81 KB, surfaces 337 KB, edges 101 KB, surfedges 100 KB,
+  vertexes 87 KB: ~880 KB, far more than the 256 KB L2, so locking the BSP walk's data in
+  the cache isn't an option.
+
+### Experiment: bitmap of used cl_entities slots for CL_RelinkEntities
+- Marked in CL_ParseUpdate, unmarked once empty and unlinked; the loop skips unmarked slots
+  (a cache miss per slot before). **50.20 fps (+0.8%, too small)**. Reverted.
+
+### Span loop analysis (cycle and instruction counters, micro-benchmark)
+- Real frames: 18.6 cycles and 12.6 instructions per pixel (~128k + 148k pixels per frame on
+  core 0 / core 1). The same loop on a synthetic job with texture and destination in internal
+  RAM: 13.2 cycles, 12.2 instructions per pixel (IPC 0.93). So ~5.4 cycles/pixel are memory
+  stalls. (The inner loop is 9 instructions/pixel; per-segment and per-span setup add ~3.
+  GCC also emits a useless loop version specialised for cachewidth == 1.)
+- Texels from a 2 KB SRAM table: 52.28 fps (+5%); span writes to one hot SRAM line (band
+  buffers already in SRAM): 49.88 (no change, band writes are free).
+- Experiment: constant-texture-row fast path (t's integer part equal at both segment ends,
+  typical on walls: 5 instead of 9 instructions/pixel): **49.64 fps, no gain**. Reverted.
+- Experiment: 32-pixel segments where 1/z changes < 1% over 32 pixels (halves the
+  per-segment perspective work there): **49.67 fps, no gain**. Reverted.
+- Conclusion: span instructions don't set the frame time; memory traffic does.
+
+### Diagnostic: no PPA palette conversion at all (display shows stale frames)
+- **52.06 fps (+4.4%)**: the PPA's PSRAM traffic (reads 2 x 300 KB, writes 900 KB per frame)
+  slows the cores' cache misses noticeably.
+
+### Experiment: PPA blend foreground as A4 instead of A8
+- The foreground (the frame itself, alpha replaced by 0) only exists because blending needs
+  one; as A4 it reads 150 KB instead of 300 KB. Start-up self-test against the CPU
+  conversion: 0 bad bytes.
+- **50.33 fps (+1% vs 49.8)**, conversion 6.5 -> 6.1 ms. Kept: verified identical output, and
+  it reduces shared PSRAM traffic, which is a measured bottleneck.
+

@@ -140,7 +140,7 @@ static esp_err_t convert_ppa(const uint8_t *src, uint8_t *dst) {
 			.buffer=src,
 			.pic_w=LCD_H_RES, .pic_h=LCD_V_RES,
 			.block_w=LCD_H_RES, .block_h=LCD_V_RES,
-			.blend_cm=PPA_BLEND_COLOR_MODE_A8,
+			.blend_cm=PPA_BLEND_COLOR_MODE_A4,	//its alpha is replaced by 0 anyway; A4 halves the read
 		},
 		.out={
 			.buffer=dst,
