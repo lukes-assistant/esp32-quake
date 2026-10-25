@@ -476,3 +476,15 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 ### Experiment: alias span packages (D_PolysetDraw's spans[]) back in internal SRAM
 - **35.02 fps (no gain)** for 33 KB of internal RAM. Reverted (stays in PSRAM).
 
+### Experiment: hardware cache prefetch (autoload) for PSRAM
+- At boot, L1 D, L2 and L1 I autoload were all **disabled** (cache_ll_*_is_*_autoload_enabled
+  printed 0). The ROM has Cache_Config/Enable_{L1_DCache,L2_Cache}_Autoload (4 regions each,
+  miss/hit/both trigger, step direction); its header says not to call them from SDK apps,
+  but they are in this chip's ROM table. Prefetched lines are clean, so DMA buffers stay
+  correct as long as drivers write back/invalidate around transfers (they do).
+- L2 autoload over all of PSRAM (0x48000000-0x4c000000), miss trigger, positive order:
+  **36.53 fps (+4.2% vs 35.06)**.
+- Plus L1 D-cache autoload with the same region: **35.95 fps** (worse than L2 alone; likely
+  pollutes the L1). Dropped.
+- L2 only, trigger on miss and hit: **36.74 fps (+4.8% vs 35.06)**. Kept.
+
