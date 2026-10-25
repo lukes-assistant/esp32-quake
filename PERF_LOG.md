@@ -658,3 +658,48 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   so benchmarks are unaffected). Reference shots at 41.2 fps look right (world, monsters,
   view model, status bar).
 
+## 2026-10-25 — Frame pipelining: core 1 finishes frame N while core 0 starts N+1
+
+### Upper bounds first (diagnostics)
+- No alias models or particles drawn at all: **50.59 fps** (vs 41.17). Without the view model
+  only: 43.46 fps. So models + particles cost ~4.6 ms of wall time per frame, and core 1 was
+  idle during ~27% of the frame (host work, BSP walk; see the phase table above).
+
+### Design (r_pipe.c, view_c1_names.h, d_part_c1.c; draw.c split into record/execute)
+- After the world of frame N is done (D_JobsEndFrame), core 0 no longer draws the models,
+  particles and 2D itself: it records them and hands the record to core 1 at VID_Update, then
+  goes on with frame N+1 (game, client, BSP walk, edges, spans with the job queue). Core 1
+  (the job worker task) draws the record: all alias models (the existing core-1 copy of the
+  alias code), particles (new core-1 copy of d_part.c), the recorded 2D calls, the palette,
+  and calls QG_DrawFrame.
+- Recorded: alias items with entity snapshots (lighting is computed by core 0 in the prepass
+  as before), particle positions and colours, Draw_* calls (translation tables copied,
+  Draw_CachePic done at record time), the palette. The core-1 drawing code reads its own
+  copy of the view state (view_c1_names.h renames r_origin, vpn, xcenter, d_viewbuffer,
+  d_pzbuffer, zspantable, ... in the core-1 compiles), captured when the frame is recorded.
+- Buffers: 3 frame buffers (core 1 finishing, core 0 rendering, display showing) and 2
+  z-buffers alternating per frame (vid.numpages = 3, so the status bar's incremental redraw
+  still works).
+- Memory core 1 reads but doesn't own (model data, pics) lives in the cache/hunk: every
+  Cache_Alloc/Free/Flush and Hunk alloc/free waits for the pending frame (R_PipeSync), as
+  do CL_ClearState and immediate palette changes.
+- Frames that can't be deferred (underwater warp; sprites, which only core 0 can draw) wait
+  for the pending frame and draw models/particles on core 0 as before (split L/R with core 1);
+  their 2D and present are still recorded. In demo1's first 10 s, 361 of 432 frames deferred.
+- Bug found on the way: the view model skips the bbox test in R_DrawAliasItems and inherited
+  the previous model's static alias_trivial_accept; if that was 1, the gun was projected
+  without clipping (huge coordinates: store fault, or core 1 rasterising forever). The split
+  path forced it to 0, hiding it. Now always 0 for the view model, as in the original.
+- Quake's hunk reduced from 20 MB to 16 MB: the profiling build (2 MB of sample buffers) ran
+  out of PSRAM for the surface cache with the new buffers.
+- Tooling: bench.sh now resets the board over JTAG and retries when flashing fails (the
+  board sits in the panic handler after a crash).
+
+### Result
+- **43.17-43.26 fps (+5% vs 41.17)**. Screenshots look right (models, particles, view model,
+  status bar). 4-minute run through all three demos: no faults.
+- Profile: core 0 idle 3.6% (was 5.9%), core 1 idle 14.1% (was 31%). The cores are now
+  fairly balanced; the frame costs ~42.5 ms of core time, 60 fps needs 33.4 ms. Core 1's alias
+  span drawing (D_PolysetDrawSpans8_c1) is 14.1% of its time; Draw_ConsoleBackground +
+  Draw_Character (console scrolling up at the start of the demo) 3.9%.
+

@@ -784,7 +784,9 @@ void R_DrawAliasItems (aliasitem_t *items, int count)
 		currententity = items[i].entity;
 		alias_viewmodel = items[i].viewmodel;
 		VectorSubtract (r_origin, currententity->origin, modelorg);
-		if (!items[i].viewmodel && !R_AliasCheckBBox ())
+		if (items[i].viewmodel)
+			alias_trivial_accept = 0;	// as the original (cl.viewent.trivial_accept is never set)
+		else if (!R_AliasCheckBBox ())
 			continue;
 		R_AliasDrawModel (&items[i].lighting);
 	}

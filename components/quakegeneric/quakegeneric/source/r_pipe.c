@@ -82,6 +82,7 @@ static pipeframe_t		*runframe;		// the record handed to core 1
 static volatile int		pending;		// a record has been handed to core 1
 static TaskHandle_t		pipe_waiter;
 
+int			r_pipe_stat_frames, r_pipe_stat_deferred;	// for the benchmark report
 qboolean	r_pipe_recording;
 qboolean	r_pipe_deferred3d;
 
@@ -277,8 +278,10 @@ qboolean R_PipeDefer3D (void)
 			}
 		}
 	}
+	r_pipe_stat_frames++;
 	if (r_pipe_deferred3d)
 	{
+		r_pipe_stat_deferred++;
 		f->deferred3d = true;
 		R_PipeCaptureView (&f->view);
 	}
@@ -387,15 +390,6 @@ void R_PipeRun (void)
 	if (f->deferred3d)
 	{
 		R_PipeApplyView (&f->view);
-		{	//DIAG
-			static int n;
-			if (n++ < 3)
-				printf ("PIPEDIAG vb %p zb %p sw %d zw %u ax %f %f %f %f vrect %d %d %d %d aliasvrect %d %d %d %d n %d split %d\n",
-					d_viewbuffer_c1, d_pzbuffer_c1, screenwidth_c1, d_zwidth_c1, aliasxscale_c1, aliasyscale_c1,
-					aliasxcenter_c1, aliasycenter_c1, r_refdef_c1.vrect.x, r_refdef_c1.vrect.y, r_refdef_c1.vrect.width,
-					r_refdef_c1.vrect.height, r_refdef_c1.aliasvrect.x, r_refdef_c1.aliasvrect.y, r_refdef_c1.aliasvrectright,
-					r_refdef_c1.aliasvrectbottom, f->numaliases, r_alias_split_c1);
-		}
 		if (f->numaliases)
 			R_DrawAliasItems_c1 (f->aliases, f->numaliases);
 		memset (&p, 0, sizeof(p));

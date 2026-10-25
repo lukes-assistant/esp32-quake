@@ -108,32 +108,7 @@ static void dump_samples(void) {
 }
 #endif
 
-//DEBUG hang reporter: if no frame is presented for 3 s, print both cores' PCs
-static volatile uint32_t frames_started;
-static void hang_report_task(void *arg) {
-	uint32_t last=0;
-	int still=0;
-	for (;;) {
-		vTaskDelay(pdMS_TO_TICKS(1000));
-		uint32_t now=frames_started;
-		if (now!=last || now==0) { last=now; still=0; continue; }
-		if (++still!=3) continue;
-		REG_WRITE(ASSIST_DEBUG_CORE_0_RCD_EN_REG, ASSIST_DEBUG_CORE_0_RCD_PDEBUGEN|ASSIST_DEBUG_CORE_0_RCD_RECORDEN);
-		REG_WRITE(ASSIST_DEBUG_CORE_1_RCD_EN_REG, ASSIST_DEBUG_CORE_1_RCD_PDEBUGEN|ASSIST_DEBUG_CORE_1_RCD_RECORDEN);
-		for (int i=0; i<8; i++) {
-			printf("HANG pc core0 %08lx core1 %08lx\n",
-					(unsigned long)REG_READ(ASSIST_DEBUG_CORE_0_RCD_PDEBUGPC_REG),
-					(unsigned long)REG_READ(ASSIST_DEBUG_CORE_1_RCD_PDEBUGPC_REG));
-			vTaskDelay(1);
-		}
-		TaskHandle_t q=xTaskGetHandle("quake"), w=xTaskGetHandle("d_jobs"), a=xTaskGetHandle("alias_c1");
-		printf("HANG states (0 run,1 ready,2 blocked) quake %d d_jobs %d alias_c1 %d\n",
-				q?(int)eTaskGetState(q):-1, w?(int)eTaskGetState(w):-1, a?(int)eTaskGetState(a):-1);
-	}
-}
-
 void profile_init() {
-	xTaskCreatePinnedToCore(hang_report_task, "hangrep", 4096, NULL, 10, NULL, 0);
 #if CONFIG_QUAKE_PROFILE
 	samples=heap_caps_malloc(CONFIG_QUAKE_PROFILE_MAX_SAMPLES*sizeof(uint32_t), MALLOC_CAP_SPIRAM);
 	assert(samples);
@@ -207,6 +182,11 @@ static void window_end(const char *what, int frames, float seconds) {
 				(float)(d_stat_buildtexels-stat_texels0)/frames,
 				(float)(d_stat_dlightbuilds-stat_dlight0)/frames);
 	}
+	{
+		extern int r_pipe_stat_frames, r_pipe_stat_deferred;
+		printf("BENCH pipeline: models/particles of %d of %d frames drawn by core 1 (r_pipe.c)\n",
+				r_pipe_stat_deferred, r_pipe_stat_frames);
+	}
 	printf("BENCH internal RAM free %u bytes, largest block %u bytes\n",
 			heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
 			heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
@@ -219,7 +199,6 @@ static void window_end(const char *what, int frames, float seconds) {
 static int bench_state=(CONFIG_QUAKE_BENCHMARK_SECONDS>0)?1:0;
 
 void profile_frame() {
-	frames_started++;
 	if (bench_state==0 || cls.timedemo) {
 		if (active) win_frames++;
 		return;
