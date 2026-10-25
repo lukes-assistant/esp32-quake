@@ -91,6 +91,7 @@ set(QUAKEGENERIC_SOURCES
 idf_component_register(
 	SRCS ${QUAKEGENERIC_SOURCES}
 	INCLUDE_DIRS ${QUAKE_SOURCE_DIR}/source/
+	LDFRAGMENTS linker.lf
 )
 
 idf_build_set_property(COMPILE_OPTIONS "-w" APPEND) # Suppress all warnings (which are often reported as errors)

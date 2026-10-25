@@ -1,0 +1,57 @@
+# ESP32-P4 port: memory placement of the engine's static data.
+#
+# Internal SRAM is reserved for what the renderer touches every frame (edge/surface/span
+# arrays, band buffers, job flags, rasteriser tables: r_main, r_edge, d_jobs, d_polyse,
+# r_zrows, r_alias, r_surf and their core-1 copies). The rest of the engine's .bss is game
+# state touched a few times per frame at most: it goes to PSRAM.
+
+[scheme:quake_extram_bss]
+entries:
+    bss -> extern_ram
+    common -> extern_ram
+
+[mapping:quake_cold_bss]
+archive: libquakegeneric.a
+entries:
+    cl_main (quake_extram_bss)
+    cl_parse (quake_extram_bss)
+    cl_tent (quake_extram_bss)
+    cl_input (quake_extram_bss)
+    cl_demo (quake_extram_bss)
+    keys (quake_extram_bss)
+    common (quake_extram_bss)
+    console (quake_extram_bss)
+    cmd (quake_extram_bss)
+    cvar (quake_extram_bss)
+    host (quake_extram_bss)
+    host_cmd (quake_extram_bss)
+    menu (quake_extram_bss)
+    model (quake_extram_bss)
+    net_main (quake_extram_bss)
+    net_bsd (quake_extram_bss)
+    net_loop (quake_extram_bss)
+    net_dgrm (quake_extram_bss)
+    net_udp (quake_extram_bss)
+    net_vcr (quake_extram_bss)
+    pr_cmds (quake_extram_bss)
+    pr_edict (quake_extram_bss)
+    pr_exec (quake_extram_bss)
+    sv_main (quake_extram_bss)
+    sv_move (quake_extram_bss)
+    sv_phys (quake_extram_bss)
+    sv_user (quake_extram_bss)
+    world (quake_extram_bss)
+    screen (quake_extram_bss)
+    sbar (quake_extram_bss)
+    view (quake_extram_bss)
+    wad (quake_extram_bss)
+    zone (quake_extram_bss)
+    chase (quake_extram_bss)
+    snd_dma (quake_extram_bss)
+    snd_mem (quake_extram_bss)
+    r_part (quake_extram_bss)
+    r_sprite (quake_extram_bss)
+    r_sprite_c1 (quake_extram_bss)
+    r_aclip (quake_extram_bss)
+    r_aclip_c1 (quake_extram_bss)
+    r_pipe (quake_extram_bss)

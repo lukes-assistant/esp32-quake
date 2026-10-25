@@ -898,3 +898,35 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
   660-byte bitset per frame instead: **50.39 fps (no gain vs 50.33)**; those lines are read
   anyway. Reverted.
 
+## 2026-10-25 — Planned memory layout, step 1: free internal SRAM for deliberate use
+
+Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB general SRAM
+(DIRAM), plus 8 KB TCM and 32 KB LP RAM (both almost unused).
+
+### Measurements behind the plan
+- L2 cache 128 KB instead of 256 KB (the minimum; it can't be 0: PSRAM, including the 1.1 MB of
+  code executing from it, is only usable through the cache): **46.74-47.05 fps (-7%)**,
+  frees 128 KB. Per-function profile diff (samples per frame, both cores): world spans
+  reading the surface cache +290 kcycles/frame, alias spans on core 1 (skins, z, frame
+  buffer) +173 k, surface builds +77 k, the rest small and spread out (code, world data).
+- Surface-cache blocks used per frame: 240-620 KB on average, peaks 1.3 MB, mostly mip 0;
+  dynamically lit up to 350 KB. Too big to keep in SRAM as whole blocks: the L2 caching the
+  parts actually read is the right tool for it. So the cache stays 256 KB for now.
+- Internal data per engine source file: hot renderer data ~145 KB (r_main.c edges/surfaces
+  67 KB, r_edge.c span buffers/bands/edge lists 67 KB, d_jobs, d_polyse, r_zrows, r_alias,
+  r_surf); cold game state ~45 KB (client, keys, console, menu, server, progs, net...).
+- IDF code in IRAM: ~110 KB (hw support 23 KB, FreeRTOS 19, HAL 11, flash driver 8, system
+  8, heap 8, SPI 6, PSRAM init 5, ring buffer 5, gdbstub 4...).
+- The AXI performance monitor (PSRAM bandwidth per master) is only described for chip
+  revision 3; this board is v1.0. Not used.
+
+### Changes
+- components/quakegeneric/linker.lf: the cold engine objects' .bss goes to PSRAM (scheme
+  quake_extram_bss); the renderer's stays internal. Free internal RAM 44.6 -> 98.5 KB.
+- IDF functions moved out of IRAM: FreeRTOS, heap, ring buffer, logging, libc helpers, SPI
+  ISRs (some were forced back by dependencies); flash driver code stays (it must run while
+  flash writes suspend the cache). Panic handler: print and reboot instead of waiting in the
+  GDB stub (unattended runs no longer need a JTAG reset after a crash).
+- Free internal RAM **137 KB** (largest heap block 40 KB: big buffers should be static).
+- **50.05-50.06 fps (unchanged)**; 4 minutes through all demos: no faults.
+
