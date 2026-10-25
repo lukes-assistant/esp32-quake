@@ -103,6 +103,10 @@ extern float	d_scalemip[3];
 
 extern void (*d_drawspans) (espan_t *pspan);
 
+// r_zrows.c: per-row column range where the world z-buffer is needed
+extern short d_zrowmin[MAXHEIGHT], d_zrowmax[MAXHEIGHT];
+void R_ComputeZRows (void);
+
 // d_jobs.c: world surface drawing shared with the second core
 void D_JobsBeginFrame (void);
 int D_JobsCount (void);

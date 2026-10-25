@@ -60,6 +60,7 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/r_sprite.c
 	${QUAKE_SOURCE_DIR}/source/r_surf.c
 	${QUAKE_SOURCE_DIR}/source/r_surf_c1.c
+	${QUAKE_SOURCE_DIR}/source/r_zrows.c
 	${QUAKE_SOURCE_DIR}/source/r_vars.c
 	${QUAKE_SOURCE_DIR}/source/sbar.c
 	${QUAKE_SOURCE_DIR}/source/screen.c

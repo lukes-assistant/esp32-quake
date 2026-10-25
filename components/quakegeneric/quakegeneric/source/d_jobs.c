@@ -71,7 +71,7 @@ static void D_DrawZSpansJob (const job_t *job)
 {
 	espan_t			*pspan = job->spans;
 	int				count, doublecount, izistep;
-	int				izi;
+	int				izi, u, v, u0, u1;
 	short			*pdest;
 	unsigned		ltemp;
 	float			zi;
@@ -81,15 +81,34 @@ static void D_DrawZSpansJob (const job_t *job)
 
 	do
 	{
-		pdest = d_pzbuffer + (d_zwidth * pspan->v) + pspan->u;
+		v = pspan->v;
+		u0 = d_zrowmin[v];
+		u1 = d_zrowmax[v];
+		if (u0 > u1)
+			continue;
 
+		u = pspan->u;
 		count = pspan->count;
+		if (u + count - 1 > u1)
+			count = u1 - u + 1;
+		if (u + count <= u0 || count <= 0)
+			continue;
 
-		du = (float)pspan->u;
-		dv = (float)pspan->v;
+		du = (float)u;
+		dv = (float)v;
 
 		zi = job->ziorigin + dv*job->zistepv + du*job->zistepu;
 		izi = (int)(zi * 0x8000 * 0x10000);
+
+		if (u < u0)
+		{
+			int skip = u0 - u;
+			u = u0;
+			count -= skip;
+			izi += skip * izistep;
+		}
+
+		pdest = d_pzbuffer + (d_zwidth * v) + u;
 
 		if ((intptr_t)pdest & 0x02)
 		{

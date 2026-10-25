@@ -382,7 +382,7 @@ D_DrawZSpans
 void D_DrawZSpans (espan_t *pspan)
 {
 	int				count, doublecount, izistep;
-	int				izi;
+	int				izi, u, v, u0, u1;
 	short			*pdest;
 	unsigned		ltemp;
 	float			zi;	// was double: soft-float on the P4 (single-precision FPU only)
@@ -394,17 +394,36 @@ void D_DrawZSpans (espan_t *pspan)
 
 	do
 	{
-		pdest = d_pzbuffer + (d_zwidth * pspan->v) + pspan->u;
+		v = pspan->v;
+		u0 = d_zrowmin[v];
+		u1 = d_zrowmax[v];
+		if (u0 > u1)
+			continue;
 
+		u = pspan->u;
 		count = pspan->count;
+		if (u + count - 1 > u1)
+			count = u1 - u + 1;
+		if (u + count <= u0 || count <= 0)
+			continue;
 
 	// calculate the initial 1/z
-		du = (float)pspan->u;
-		dv = (float)pspan->v;
+		du = (float)u;
+		dv = (float)v;
 
 		zi = d_ziorigin + dv*d_zistepv + du*d_zistepu;
 	// we count on FP exceptions being turned off to avoid range problems
 		izi = (int)(zi * 0x8000 * 0x10000);
+
+		if (u < u0)
+		{
+			int skip = u0 - u;
+			u = u0;
+			count -= skip;
+			izi += skip * izistep;
+		}
+
+		pdest = d_pzbuffer + (d_zwidth * v) + u;
 
 		if ((intptr_t)pdest & 0x02)
 		{

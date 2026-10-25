@@ -406,3 +406,15 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   idle 39%. Core 0's remaining serial work (models, edges, game logic, HUD) is now what
   leaves core 1 idle.
 
+- Without profiling: **29.03 fps** (from 18.6 at the start of the 640x480 work: +56%).
+
+
+### Experiment: sparse world z-buffer fill (r_zrows.c)
+- The world z-buffer is only read by alias models (including cl.viewent), sprites and
+  particles drawn after the world pass. Before R_EdgeDrawing, R_ComputeZRows computes per-row
+  [d_zrowmin[v], d_zrowmax[v]] ranges from each alias model's Z-clipped frame bounding box
+  (8 corners + 12 edges clipped at ALIAS_Z_CLIP_PLANE, so cl.viewent at r_origin gets its
+  tight screen box instead of triggering a full-screen fallback), sprite spheres and live
+  particle squares. D_DrawZSpansJob and D_DrawZSpans clip spans to [d_zrowmin[v], d_zrowmax[v]]
+  and advance izi by skip * izistep for bit-exact z values inside the range.
+- **32.46 fps (+11.8% vs 29.03)** (325 frames / 10.01 s). Kept.
