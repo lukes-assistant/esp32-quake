@@ -1,13 +1,12 @@
 /*
 d_jobs.c -- share world span drawing with the second core (ESP32-P4 port)
 
-Each D_DrawSurfaces flush works in two phases:
-
-1. Core 0 walks the surfaces as before: it builds the surface caches and texture gradients,
-   but instead of drawing the spans of normal textured surfaces it snapshots the gradients
-   into a "colour job". Meanwhile a worker task on core 1 fills the z-buffer for every
-   surface ("z jobs", queued before the walk starts).
-2. Both cores draw the colour jobs, taking them from a shared queue.
+In each D_DrawSurfaces flush, core 0 walks the surfaces as before: it builds the surface
+caches and texture gradients, but instead of drawing the spans of normal textured surfaces
+it snapshots the gradients into a "colour job" and publishes it. A worker task on core 1
+first fills the z-buffer for every surface ("z jobs", queued before the walk starts), then
+draws colour jobs as soon as they are published. When core 0 has walked all surfaces it
+closes the queue and helps draw the remaining colour jobs.
 
 D_JobsFinish waits for core 1 before the span lists are reused. The job versions of
 D_DrawZSpans and D_DrawSpans8 do the same arithmetic as the originals, with the gradients
@@ -45,8 +44,9 @@ typedef struct
 static zjob_t							zjobs[MAX_ZJOBS];
 static int								numzjobs;
 static EXT_RAM_BSS_ATTR colorjob_t		colorjobs[MAX_COLORJOBS];
-static int								numcolorjobs;
+static int								numcolorjobs;	// published, written by core 0 only
 static int								nextcolorjob;	// claimed atomically by both cores
+static int								colorjobs_closed;	// core 0 has published all jobs
 
 static TaskHandle_t		jobs_task;
 static TaskHandle_t		jobs_waiter;
@@ -248,8 +248,18 @@ static void D_DrawColorJobs (void)
 {
 	int		i;
 
-	while ((i = __atomic_fetch_add (&nextcolorjob, 1, __ATOMIC_ACQ_REL)) < numcolorjobs)
+	for (;;)
+	{
+		i = __atomic_fetch_add (&nextcolorjob, 1, __ATOMIC_ACQ_REL);
+	// wait until job i is published, or the queue is closed without it
+		while (i >= __atomic_load_n (&numcolorjobs, __ATOMIC_ACQUIRE))
+		{
+			if (__atomic_load_n (&colorjobs_closed, __ATOMIC_ACQUIRE) &&
+				i >= __atomic_load_n (&numcolorjobs, __ATOMIC_ACQUIRE))
+				return;
+		}
 		D_DrawSpans8Job (&colorjobs[i]);
+	}
 }
 
 static void D_JobsTask (void *arg)
@@ -258,13 +268,9 @@ static void D_JobsTask (void *arg)
 
 	for (;;)
 	{
-	// phase 1: z-buffer fill
-		ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time: two can be pending
+		ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time
 		for (i = 0 ; i < numzjobs ; i++)
 			D_DrawZSpansJob (&zjobs[i]);
-
-	// phase 2: share the colour jobs with core 0
-		ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time: two can be pending
 		D_DrawColorJobs ();
 
 		xTaskNotifyGive (jobs_waiter);	// exactly once per D_JobsStart
@@ -304,7 +310,7 @@ qboolean D_ColorJobAdd (espan_t *spans)
 
 	if (!jobs_started || numcolorjobs >= MAX_COLORJOBS)
 		return false;
-	job = &colorjobs[numcolorjobs++];
+	job = &colorjobs[numcolorjobs];
 	job->spans = spans;
 	job->cacheblock = cacheblock;
 	job->cachewidth = cachewidth;
@@ -321,6 +327,7 @@ qboolean D_ColorJobAdd (espan_t *spans)
 	job->tadjust = tadjust;
 	job->bbextents = bbextents;
 	job->bbextentt = bbextentt;
+	__atomic_store_n (&numcolorjobs, numcolorjobs + 1, __ATOMIC_RELEASE);	// publish
 	return true;
 }
 
@@ -335,6 +342,7 @@ void D_JobsStart (void)
 		xTaskCreatePinnedToCore (D_JobsTask, "d_jobs", 4096, NULL, JOBS_PRIORITY, &jobs_task, JOBS_CORE);
 	numcolorjobs = 0;
 	nextcolorjob = 0;
+	colorjobs_closed = 0;
 	jobs_waiter = xTaskGetCurrentTaskHandle ();
 	jobs_started = true;
 	xTaskNotifyGive (jobs_task);
@@ -343,14 +351,13 @@ void D_JobsStart (void)
 /*
 D_JobsFinish
 
-Phase 2: draw the colour jobs on both cores, then wait for core 1.
+Close the colour job queue, help draw the remaining jobs, then wait for core 1.
 */
 void D_JobsFinish (void)
 {
 	if (!jobs_started)
 		return;
-	__atomic_thread_fence (__ATOMIC_RELEASE);
-	xTaskNotifyGive (jobs_task);
+	__atomic_store_n (&colorjobs_closed, 1, __ATOMIC_RELEASE);
 	D_DrawColorJobs ();
 	ulTaskNotifyTake (pdFALSE, portMAX_DELAY);	// one notification at a time: two can be pending
 	jobs_started = false;

@@ -355,3 +355,15 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
 - **26.46 fps (+13% vs 23.36)**. Conversion now 7.4 ms in hardware; core 1 is free for
   span jobs meanwhile.
 
+### Profile after PPA conversion (26.45 fps), core 0
+- D_DrawColorJobs (core 0's share of span drawing) 34.4%, R_DrawSurfaceBlock8_mip0 17.1% +
+  mip1 2.2% (surface-cache building, core 0 only), D_PolysetDrawSpans8 7.1%,
+  D_PolysetScanLeftEdge 2.2%, R_GenerateSpans 2.0%, R_RecursiveWorldNode 2.0%, idle 2.3%.
+
+### Experiment: colour jobs published progressively (core 1 starts drawing during the walk)
+- Instead of two phases, each colour job is published (atomic release store of the count)
+  as soon as its surface cache and gradients are ready; core 1 draws them after its z jobs
+  while core 0 keeps building surface caches. Core 0 closes the queue at the end and helps.
+  Waiting for an unpublished job is a spin on an internal variable.
+- **27.14 fps (+2.6% vs 26.46)**. Kept.
+
