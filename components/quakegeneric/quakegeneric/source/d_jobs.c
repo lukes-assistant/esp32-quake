@@ -436,7 +436,15 @@ static void D_WorkerTask (void *arg)
 void D_JobsBeginFrame (void)
 {
 	if (!worker_task)
-		xTaskCreatePinnedToCore (D_WorkerTask, "d_jobs", 8192, NULL, JOBS_PRIORITY, &worker_task, JOBS_CORE);
+	{
+		// a static stack in internal SRAM: the heap could hand out slow memory (with little
+		// internal RAM left, a heap-allocated stack once landed in LP RAM: 2.6x slower)
+		static StackType_t	worker_stack[8192 / sizeof(StackType_t)];
+		static StaticTask_t	worker_tcb;
+
+		worker_task = xTaskCreateStaticPinnedToCore (D_WorkerTask, "d_jobs", 8192, NULL,
+				JOBS_PRIORITY, worker_stack, &worker_tcb, JOBS_CORE);
+	}
 	frame_task = xTaskGetCurrentTaskHandle ();
 	numjobs = 0;
 	nextjob = 0;

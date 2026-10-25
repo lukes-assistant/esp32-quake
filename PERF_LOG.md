@@ -930,3 +930,20 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
 - Free internal RAM **137 KB** (largest heap block 40 KB: big buffers should be static).
 - **50.05-50.06 fps (unchanged)**; 4 minutes through all demos: no faults.
 
+### Found: the "mysterious 19 fps" builds -- a task stack in LP RAM
+- Three earlier diagnostics (a 32 KB SRAM texture table, the span micro-benchmark, a 48 KB
+  SRAM build scratch) and a pure "ballast" test (unused static arrays in main/) all dropped
+  to ~19 fps once free internal RAM fell below ~40 KB. Not an allocation failure (failed-alloc
+  callback silent, no small malloc fell back to PSRAM), not corruption (screenshots fine), no
+  slow SRAM region (read latency uniform). The core-1 profile showed the alias code crawling
+  plus ~13% in trap/interrupt entry (lazy FPU/PIE context traps).
+- Task stack addresses: in the slow builds the core-1 job worker's stack was at 0x50108408,
+  in the 32 KB **LP RAM**, which IDF adds to the heap (CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_
+  HEAP) and which is slow for the HP cores. With the main heap tight, xTaskCreate put the stack
+  there; every stack access of core 1's drawing code paid for it.
+- Fix: LP RAM no longer part of the heap (kept for deliberate use), and the worker's stack is a
+  static array in internal SRAM. With free internal RAM pushed down to 36 KB: **49.96 fps**
+  (was 19). Normal build 49.95 fps, 105.6 KB free.
+- Earlier results affected (they were measuring this, not what they intended): the 32 KB SRAM
+  texture diagnostic, the 19 fps span micro-benchmark run, the 48 KB build-scratch diagnostic.
+
