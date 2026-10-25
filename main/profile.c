@@ -128,6 +128,8 @@ void profile_init() {
 }
 
 extern int r_peak_edges, r_peak_surfs;
+extern int d_stat_builds, d_stat_buildtexels, d_stat_dlightbuilds;
+static int stat_builds0, stat_texels0, stat_dlight0;
 
 static void window_start(void) {
 	taskENTER_CRITICAL(&stats_mux);
@@ -138,6 +140,9 @@ static void window_start(void) {
 	wait_frames=0;
 	taskEXIT_CRITICAL(&stats_mux);
 	win_frames=0;
+	stat_builds0=d_stat_builds;
+	stat_texels0=d_stat_buildtexels;
+	stat_dlight0=d_stat_dlightbuilds;
 	win_start_us=esp_timer_get_time();
 #if CONFIG_QUAKE_PROFILE
 	nsamples=0;
@@ -171,6 +176,12 @@ static void window_end(const char *what, int frames, float seconds) {
 	printf("BENCH peak edges %d, peak surfaces %d, quake stack unused %lu bytes\n",
 			r_peak_edges, r_peak_surfs,
 			quake_task?(unsigned long)uxTaskGetStackHighWaterMark(quake_task):0);
+	if (frames>0) {
+		printf("BENCH surface builds per frame %.1f (%.0f texels, %.1f due to dynamic lights)\n",
+				(float)(d_stat_builds-stat_builds0)/frames,
+				(float)(d_stat_buildtexels-stat_texels0)/frames,
+				(float)(d_stat_dlightbuilds-stat_dlight0)/frames);
+	}
 	printf("BENCH internal RAM free %u bytes, largest block %u bytes\n",
 			heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
 			heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));

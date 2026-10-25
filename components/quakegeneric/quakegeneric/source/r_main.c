@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_main.c
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "r_local.h"
 
 //define	PASSAGES
@@ -924,6 +925,182 @@ void R_EdgeDrawing (void)
 
 
 /*
+=============
+R_DrawEntitiesAndViewModel
+
+ESP32-P4 port: replaces R_DrawEntitiesOnList + R_DrawViewModel. Core 0 culls the alias
+models, works out their lighting (R_LightPoint isn't thread-safe) and loads them
+(Mod_Extradata touches the cache LRU); then both cores draw the whole list at once, core 0
+clipped to the left half of the columns and core 1 (r_alias_c1.c) to the right half (the view
+model, usually the biggest, is centred horizontally, so this balances well). Sprites
+are drawn by core 0 afterwards.
+=============
+*/
+qboolean	r_alias_split;
+
+static void R_AliasModelLighting (alight_t *lighting, float *lightvec)
+{
+	int		j, lnum;
+	vec3_t	dist;
+	float	add;
+
+	j = R_LightPoint (currententity->origin);
+
+	lighting->ambientlight = j;
+	lighting->shadelight = j;
+
+	lighting->plightvec = lightvec;
+
+	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	{
+		if (cl_dlights[lnum].die >= cl.time)
+		{
+			VectorSubtract (currententity->origin,
+							cl_dlights[lnum].origin,
+							dist);
+			add = cl_dlights[lnum].radius - Length(dist);
+
+			if (add > 0)
+				lighting->ambientlight += add;
+		}
+	}
+
+// clamp lighting so it doesn't overbright as much
+	if (lighting->ambientlight > 128)
+		lighting->ambientlight = 128;
+	if (lighting->ambientlight + lighting->shadelight > 192)
+		lighting->shadelight = 192 - lighting->ambientlight;
+}
+
+// same as R_DrawViewModel, up to the drawing
+static qboolean R_ViewModelLighting (alight_t *lighting, float *lightvec)
+{
+	int			j, lnum;
+	vec3_t		dist;
+	float		add;
+	dlight_t	*dl;
+
+	if (!r_drawviewmodel.value || r_fov_greater_than_90)
+		return false;
+	if (cl.items & IT_INVISIBILITY)
+		return false;
+	if (cl.stats[STAT_HEALTH] <= 0)
+		return false;
+
+	currententity = &cl.viewent;
+	if (!currententity->model)
+		return false;
+
+	VectorCopy (currententity->origin, r_entorigin);
+	VectorSubtract (r_origin, r_entorigin, modelorg);
+
+	VectorCopy (vup, viewlightvec);
+	VectorInverse (viewlightvec);
+
+	j = R_LightPoint (currententity->origin);
+
+	if (j < 24)
+		j = 24;		// allways give some light on gun
+	lighting->ambientlight = j;
+	lighting->shadelight = j;
+
+	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	{
+		dl = &cl_dlights[lnum];
+		if (!dl->radius)
+			continue;
+		if (dl->die < cl.time)
+			continue;
+
+		VectorSubtract (currententity->origin, dl->origin, dist);
+		add = dl->radius - Length(dist);
+		if (add > 0)
+			lighting->ambientlight += add;
+	}
+
+	if (lighting->ambientlight > 128)
+		lighting->ambientlight = 128;
+	if (lighting->ambientlight + lighting->shadelight > 192)
+		lighting->shadelight = 192 - lighting->ambientlight;
+
+	lighting->plightvec = lightvec;
+	return true;
+}
+
+void R_DrawEntitiesAndViewModel (void)
+{
+	static EXT_RAM_BSS_ATTR aliasitem_t	items[MAX_VISEDICTS + 1];
+	static float	lightvec[3] = {-1, 0, 0};	// FIXME: remove and do real lighting
+	int				i, count = 0, saved_right;
+	refdef_t		refdef_c1;
+
+	if (r_drawentities.value)
+	{
+		for (i=0 ; i<cl_numvisedicts ; i++)
+		{
+			currententity = cl_visedicts[i];
+
+			if (currententity == &cl_entities[cl.viewentity])
+				continue;	// don't draw the player
+			if (currententity->model->type != mod_alias)
+				continue;
+
+			VectorCopy (currententity->origin, r_entorigin);
+			VectorSubtract (r_origin, r_entorigin, modelorg);
+
+			if (!R_AliasCheckBBox ())
+				continue;
+
+			R_AliasModelLighting (&items[count].lighting, lightvec);
+			Mod_Extradata (currententity->model);
+			items[count].entity = currententity;
+			items[count].viewmodel = false;
+			count++;
+		}
+	}
+
+	if (R_ViewModelLighting (&items[count].lighting, lightvec))
+	{
+		Mod_Extradata (currententity->model);
+		items[count].entity = currententity;
+		items[count].viewmodel = true;
+		count++;
+	}
+
+	if (count)
+	{
+	// left half of the columns on core 0, right half on core 1
+		refdef_c1 = r_refdef;
+		refdef_c1.aliasvrect.x = (r_refdef.aliasvrect.x + r_refdef.aliasvrectright) / 2;
+		saved_right = r_refdef.aliasvrectright;
+		r_refdef.aliasvrectright = refdef_c1.aliasvrect.x;
+
+		r_alias_split = true;
+		R_AliasC1Start (items, count, &refdef_c1);
+		R_DrawAliasItems (items, count);
+		R_AliasC1Wait ();
+		r_alias_split = false;
+
+		r_refdef.aliasvrectright = saved_right;
+	}
+
+	if (r_drawentities.value)
+	{
+		for (i=0 ; i<cl_numvisedicts ; i++)
+		{
+			currententity = cl_visedicts[i];
+			if (currententity == &cl_entities[cl.viewentity])
+				continue;
+			if (currententity->model->type != mod_sprite)
+				continue;
+			VectorCopy (currententity->origin, r_entorigin);
+			VectorSubtract (r_origin, r_entorigin, modelorg);
+			R_DrawSprite ();
+		}
+	}
+}
+
+/*
 ================
 R_RenderView
 
@@ -979,7 +1156,7 @@ SetVisibilityByPassages ();
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
+	R_DrawEntitiesAndViewModel ();
 
 	if (r_dspeeds.value)
 	{
@@ -987,7 +1164,7 @@ SetVisibilityByPassages ();
 		dv_time1 = de_time2;
 	}
 
-	R_DrawViewModel ();
+	// (the view model is drawn by R_DrawEntitiesAndViewModel)
 
 	if (r_dspeeds.value)
 	{

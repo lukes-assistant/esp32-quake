@@ -238,6 +238,20 @@ qboolean R_AliasCheckBBox (void);
 // particle stuff
 
 void R_DrawParticles (void);
+
+// alias models drawn by both cores, each clipped to half of the columns (r_main.c, r_alias.c,
+// r_alias_c1.c)
+typedef struct
+{
+	entity_t	*entity;
+	alight_t	lighting;
+	qboolean	viewmodel;	// skip the bounding-box test (as the original view model path)
+} aliasitem_t;
+extern qboolean	r_alias_split;
+void R_DrawAliasItems (aliasitem_t *items, int count);
+void R_DrawAliasItems_c1 (aliasitem_t *items, int count);
+void R_AliasC1Start (aliasitem_t *items, int count, const refdef_t *refdef);
+void R_AliasC1Wait (void);
 void R_InitParticles (void);
 void R_ClearParticles (void);
 void R_ReadPointFile_f (void);

@@ -20,6 +20,7 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/d_modech.c
 	${QUAKE_SOURCE_DIR}/source/d_part.c
 	${QUAKE_SOURCE_DIR}/source/d_polyse.c
+	${QUAKE_SOURCE_DIR}/source/d_polyse_c1.c
 	${QUAKE_SOURCE_DIR}/source/d_scan.c
 	${QUAKE_SOURCE_DIR}/source/d_sky.c
 	${QUAKE_SOURCE_DIR}/source/d_sprite.c
@@ -47,7 +48,9 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/pr_edict.c
 	${QUAKE_SOURCE_DIR}/source/pr_exec.c
 	${QUAKE_SOURCE_DIR}/source/r_aclip.c
+	${QUAKE_SOURCE_DIR}/source/r_aclip_c1.c
 	${QUAKE_SOURCE_DIR}/source/r_alias.c
+	${QUAKE_SOURCE_DIR}/source/r_alias_c1.c
 	${QUAKE_SOURCE_DIR}/source/r_bsp.c
 	${QUAKE_SOURCE_DIR}/source/r_draw.c
 	${QUAKE_SOURCE_DIR}/source/r_edge.c

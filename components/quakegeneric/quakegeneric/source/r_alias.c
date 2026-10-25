@@ -44,6 +44,10 @@ aliashdr_t			*paliashdr;
 finalvert_t			*pfinalverts;
 auxvert_t			*pauxverts;
 static float		ziscale;
+
+// per copy of this file (r_alias_c1.c compiles it again for core 1), so the two cores don't
+// share it; it used to be a field of entity_t
+static int			alias_trivial_accept;
 static model_t		*pmodel;
 
 static vec3_t		alias_forward, alias_right, alias_up;
@@ -94,6 +98,7 @@ qboolean R_AliasCheckBBox (void)
 	float				zi, basepts[8][3], v0, v1, frac;
 	finalvert_t			*pv0, *pv1, viewpts[16];
 	auxvert_t			*pa0, *pa1, viewaux[16];
+	qboolean			allleft = true, allright = true;	// relative to aliasvrect columns
 	maliasframedesc_t	*pframedesc;
 	qboolean			zclipped, zfullyclipped;
 	unsigned			anyclip, allclip;
@@ -101,7 +106,7 @@ qboolean R_AliasCheckBBox (void)
 	
 // expand, rotate, and translate points into worldspace
 
-	currententity->trivial_accept = 0;
+	alias_trivial_accept = 0;
 	pmodel = currententity->model;
 	pahdr = Mod_Extradata (pmodel);
 	pmdl = (mdl_t *)((byte *)pahdr + pahdr->model);
@@ -227,18 +232,26 @@ qboolean R_AliasCheckBBox (void)
 
 		anyclip |= flags;
 		allclip &= flags;
+
+		if (v0 >= r_refdef.aliasvrect.x - 1)
+			allleft = false;
+		if (v0 <= r_refdef.aliasvrectright + 1)
+			allright = false;
 	}
 
 	if (allclip)
 		return false;	// trivial reject off one side
 
-	currententity->trivial_accept = !anyclip & !zclipped;
+	if (r_alias_split && (allleft || allright))
+		return false;	// wholly in the other core's columns
 
-	if (currententity->trivial_accept)
+	alias_trivial_accept = !anyclip & !zclipped;
+
+	if (alias_trivial_accept)
 	{
 		if (minz > (r_aliastransition + (pmdl->size * r_resfudge)))
 		{
-			currententity->trivial_accept |= 2;
+			alias_trivial_accept |= 2;
 		}
 	}
 
@@ -712,14 +725,19 @@ void R_AliasDrawModel (alight_t *plighting)
 	pmdl = (mdl_t *)((byte *)paliashdr + paliashdr->model);
 
 	R_AliasSetupSkin ();
-	R_AliasSetUpTransform (currententity->trivial_accept);
+// "trivially accepted" means inside the whole view; while the two cores each draw half of
+// the columns, every model must be clipped to this core's columns (aliasvrect)
+	if (r_alias_split)
+		alias_trivial_accept = 0;
+
+	R_AliasSetUpTransform (alias_trivial_accept);
 	R_AliasSetupLighting (plighting);
 	R_AliasSetupFrame ();
 
 	if (!currententity->colormap)
 		Sys_Error ("R_AliasDrawModel: !currententity->colormap");
 
-	r_affinetridesc.drawtype = (currententity->trivial_accept == 3) &&
+	r_affinetridesc.drawtype = (alias_trivial_accept == 3) &&
 			r_recursiveaffinetriangles;
 
 	if (r_affinetridesc.drawtype)
@@ -734,9 +752,31 @@ void R_AliasDrawModel (alight_t *plighting)
 	else
 		ziscale = (float)0x8000 * (float)0x10000 * 3.0;
 
-	if (currententity->trivial_accept)
+	if (alias_trivial_accept)
 		R_AliasPrepareUnclippedPoints ();
 	else
 		R_AliasPreparePoints ();
 }
 
+
+/*
+================
+R_DrawAliasItems
+
+Draw a list of alias models prepared by R_DrawEntitiesAndViewModel (r_main.c), clipped to
+r_refdef.aliasvrect. Compiled for each core (r_alias_c1.c).
+================
+*/
+void R_DrawAliasItems (aliasitem_t *items, int count)
+{
+	int		i;
+
+	for (i = 0 ; i < count ; i++)
+	{
+		currententity = items[i].entity;
+		VectorSubtract (r_origin, currententity->origin, modelorg);
+		if (!items[i].viewmodel && !R_AliasCheckBBox ())
+			continue;
+		R_AliasDrawModel (&items[i].lighting);
+	}
+}

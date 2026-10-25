@@ -505,3 +505,39 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   from the 8-pixel C path, same as the original game's look.
 - **37.77 fps (+2.8% vs 36.74)**. Kept.
 
+### Statistics: surface-cache builds (new BENCH line)
+- Per frame in the 10 s window: **33.9 builds, 222k texels, 31.0 of them because a dynamic
+  light touches the surface** (dlit surfaces are rebuilt every frame in Quake's renderer).
+
+### Diagnostic: surface-cache build stores (R_DrawSurfaceBlock8_mip0) to an SRAM scratch row
+- **41.09 fps (+8.6% vs 37.83)**: the builds' PSRAM writes (write-allocate) are a large cost.
+
+### Experiment: build surface-cache blocks in 16-row bands in SRAM, then memcpy each band
+- R_DrawSurface reordered to draw one band of block rows (all columns) into a 4 KB SRAM band
+  buffer (per core copy) and copy the band (contiguous in the cache block) to PSRAM.
+- **37.69 fps (no gain vs 37.83)**: contiguous CPU stores into PSRAM cost the same as the
+  scattered ones, so the cost is the PSRAM write traffic itself (likely write-allocate line
+  fills), not the store pattern. A DMA copy (esp_async_memcpy, no line fills, async) could
+  avoid it but needs careful cache invalidation; upper bound ~8%. Not pursued for now.
+  Reverted.
+
+### Experiment: alias models drawn by both cores, each clipped to half the screen
+- r_alias.c, d_polyse.c and r_aclip.c are compiled a second time (r_alias_c1.c,
+  d_polyse_c1.c, r_aclip_c1.c) with every global/function renamed by alias_c1_names.h,
+  including the shared state they write (currententity, modelorg, r_refdef, the rasteriser
+  error terms) and Mod_Extradata (core 1 gets a read-only version; core 0 loads every model
+  in a prepass so the cache LRU is only touched by core 0). entity_t.trivial_accept became a
+  per-copy static. R_DrawEntitiesAndViewModel (r_main.c) culls, lights (R_LightPoint isn't
+  thread-safe) and loads the alias models + view model on core 0, then both cores draw the
+  list clipped via r_refdef.aliasvrect; models wholly in the other half are rejected in
+  R_AliasCheckBBox. Sprites are drawn by core 0 afterwards.
+- First run: **crash** on core 1 (Load access fault in R_AliasPrepareUnclippedPoints_c1).
+  R_AliasC1Wait used a bare task notification, but the game task also receives notifications
+  from the d_jobs worker; a stale one let core 0 clear r_alias_split while core 1 was still
+  drawing, so core 1 took the unclipped path. Fixed with an explicit done flag. (The panic
+  left the board in the GDB stub; recovered with an OpenOCD JTAG reset.)
+- Top/bottom split: **37.45 fps (no gain vs 37.83)**: the view model (the biggest model)
+  sits low on the screen, so core 1 got almost all its pixels.
+- Left/right split: **38.76 fps (+2.5%)**. Kept. Possible sub-pixel seam where models are
+  clipped at the centre line (same clipping as at screen edges); not visible in the log.
+

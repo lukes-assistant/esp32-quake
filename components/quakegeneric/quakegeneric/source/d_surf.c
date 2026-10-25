@@ -266,6 +266,10 @@ the r_drawsurf setup for R_DrawSurface, which the caller runs later (on the othe
 Doesn't touch the global r_drawsurf, which the other core uses while building.
 ================
 */
+// statistics for the benchmark report: surface-cache blocks built, their texels, and how
+// many were built because of dynamic lights
+int d_stat_builds, d_stat_buildtexels, d_stat_dlightbuilds;
+
 surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds)
 {
 	surfcache_t     *cache;
@@ -320,6 +324,10 @@ surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean
 	ds->surf = surface;
 
 	c_surf++;
+	d_stat_builds++;
+	d_stat_buildtexels += ds->surfwidth * ds->surfheight;
+	if (surface->dlightframe == r_framecount)
+		d_stat_dlightbuilds++;
 	*needbuild = true;
 	return cache;
 }
