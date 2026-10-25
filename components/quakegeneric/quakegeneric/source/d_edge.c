@@ -232,7 +232,7 @@ void D_DrawSurfaces (void)
 				}
 
 				D_DrawSkyScans8 (s->spans);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWBACKGROUND)
@@ -244,7 +244,7 @@ void D_DrawSurfaces (void)
 				d_ziorigin = -0.9;
 
 				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
 					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWTURB)
@@ -272,7 +272,7 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 				Turbulent8 (s->spans);
-				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1))
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
 					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
@@ -322,7 +322,7 @@ void D_DrawSurfaces (void)
 				D_CalcGradients (pface);
 
 				if (d_drawspans != D_DrawSpans8 ||
-					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds, waitjob))
+					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds, waitjob, s - surfaces))
 				{
 					if (needbuild)
 					{

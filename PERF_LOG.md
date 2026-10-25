@@ -1255,3 +1255,14 @@ D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3
   21.5 -> 51.2 KB**. Margins after the change: quake 6.4 KB, d_jobs 1.6 KB, draw 1.3 KB,
   audio 1.2 KB, usbhid 1.3 KB.
 
+### Job queue split: per-surface records + 16-byte jobs (d_jobs.c)
+- A surface gets a job per span flush (38 bands per frame at 800x600), and each 72 B job used to
+  carry its own copy of the surface's gradients, block and extents. Now those live in a 60 B
+  per-surface record (jobrec_t), made the first time the surface is queued in a frame and reused
+  by its later jobs (surfaces[] lasts the whole frame; reuse also checks block and gradient
+  origin); a job is 16 B (spans, band pointer, record, wait job, build, colour flag).
+- MAX_JOBS 1024 -> 1600 (peak demand 1493), MAX_RECS 448 (peak 228). Tables: jobs 25.6 KB +
+  jobdone 6.4 + records 26.9 + recof 0.9 + build_ds 7.0 = 66.8 KB (was 85.4 KB with 1024 jobs).
+- timedemo demo1: **38.52 fps (+0.7% vs 38.26)**, queue never full (was full in 43 of 970
+  frames, 8127 surfaces drawn by core 0 itself). Internal RAM free **62.4 -> 80.3 KB, largest
+  block 51.2 -> 63.5 KB**. Attract demo 38.17 fps; the user checked the picture on the monitor.

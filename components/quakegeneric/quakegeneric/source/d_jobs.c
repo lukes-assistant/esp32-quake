@@ -32,21 +32,31 @@ with the gradients passed in instead of read from globals.
 extern drawsurf_t	r_drawsurf_c1;
 void R_DrawSurface_c1 (void);
 
-#define MAX_JOBS		1024
+#define MAX_JOBS		1600	// peak demand 1493 per frame (timedemo demo1 at 800x600)
+#define MAX_RECS		448		// one per surface drawn (NUMSTACKSURFACES)
 #define MAX_BUILDS		160		// peak 107 per frame (timedemo demo1 at 800x600)
 #define JOBS_CORE		1
 #define JOBS_PRIORITY	6	// above the display conversion task, below audio
 
+// What a surface's jobs share within a frame: its gradients and surface-cache block. A surface
+// gets a job per span flush (every band), so this is stored once per frame and the jobs point
+// to it.
 typedef struct
 {
-	espan_t		*spans;
 	float		ziorigin, zistepu, zistepv;
-	pixel_t		*cacheblock;
-	pixel_t		*viewbuffer;	// d_viewbuffer when queued (a band buffer, r_edge.c)
+	pixel_t		*cacheblock;	// NULL: z only
 	float		sdivzorigin, sdivzstepu, sdivzstepv;
 	float		tdivzorigin, tdivzstepu, tdivzstepv;
 	fixed16_t	sadjust, tadjust, bbextents, bbextentt;
 	int16_t		cachewidth;
+	int16_t		surf;			// index in surfaces[] (the record's key this frame)
+} jobrec_t;
+
+typedef struct
+{
+	espan_t		*spans;
+	pixel_t		*viewbuffer;	// d_viewbuffer when queued (a band buffer, r_edge.c)
+	int16_t		rec;			// index into recs[]
 	int16_t		waitjob;		// >= 0: the job building the surface-cache block, wait for it
 	int16_t		build_idx;		// >= 0: index into build_ds[] (build surface-cache block first)
 	uint8_t		color;			// draw textured spans (else z only)
@@ -54,6 +64,9 @@ typedef struct
 } job_t;
 
 static job_t					jobs[MAX_JOBS];
+static jobrec_t					recs[MAX_RECS];
+static int16_t					recof[NUMSTACKSURFACES];	// surface -> its record (valid if it points back)
+static int						numrecs;		// written by core 0 only
 static drawsurf_t				build_ds[MAX_BUILDS];
 static uint32_t					jobdone[MAX_JOBS];	// = frame generation when finished
 
@@ -68,6 +81,7 @@ static qboolean	jobs_active;	// a frame is in progress (core 0 only)
 
 int		d_peak_jobs, d_peak_builds;	// per-frame peaks, for sizing (BENCH report)
 int		d_peak_demand;				// jobs + refused (queue full) in one frame
+int		d_peak_recs;
 int		d_frames_full, d_refused_total, d_stat_frames;
 static int	refused;					// this frame
 
@@ -79,7 +93,7 @@ D_DrawZSpansJob
 
 D_DrawZSpans with the gradients passed in.
 */
-static void D_DrawZSpansJob (const job_t *job)
+static void D_DrawZSpansJob (const job_t *job, const jobrec_t *rec)
 {
 	espan_t			*pspan = job->spans;
 	int				count, doublecount, izistep;
@@ -89,7 +103,7 @@ static void D_DrawZSpansJob (const job_t *job)
 	float			zi;
 	float			du, dv;
 
-	izistep = (int)(job->zistepu * 0x8000 * 0x10000);
+	izistep = (int)(rec->zistepu * 0x8000 * 0x10000);
 
 	do
 	{
@@ -109,7 +123,7 @@ static void D_DrawZSpansJob (const job_t *job)
 		du = (float)u;
 		dv = (float)v;
 
-		zi = job->ziorigin + dv*job->zistepv + du*job->zistepu;
+		zi = rec->ziorigin + dv*rec->zistepv + du*rec->zistepu;
 		izi = (int)(zi * 0x8000 * 0x10000);
 
 		if (u < u0)
@@ -157,7 +171,7 @@ D_DrawSpans8 with the gradients passed in.
 #define SPAN_SUBDIV			16
 #define SPAN_SUBDIV_SHIFT	4
 
-static void D_DrawSpans8Job (const job_t *job)
+static void D_DrawSpans8Job (const job_t *job, const jobrec_t *rec)
 {
 	espan_t			*pspan = job->spans;
 	int				count, spancount;
@@ -167,15 +181,15 @@ static void D_DrawSpans8Job (const job_t *job)
 	float			sdivz, tdivz, zi, z, du, dv, spancountminus1;
 	float			sdivz8stepu, tdivz8stepu, zi8stepu;
 	const float		k65536 = (float)0x10000;
-	const int		cachewidth = job->cachewidth;
-	const fixed16_t	sadjust = job->sadjust, tadjust = job->tadjust;
-	const fixed16_t	bbextents = job->bbextents, bbextentt = job->bbextentt;
+	const int		cachewidth = rec->cachewidth;
+	const fixed16_t	sadjust = rec->sadjust, tadjust = rec->tadjust;
+	const fixed16_t	bbextents = rec->bbextents, bbextentt = rec->bbextentt;
 
-	pbase = (const unsigned char *)job->cacheblock;
+	pbase = (const unsigned char *)rec->cacheblock;
 
-	sdivz8stepu = job->sdivzstepu * (float)SPAN_SUBDIV;
-	tdivz8stepu = job->tdivzstepu * (float)SPAN_SUBDIV;
-	zi8stepu = job->zistepu * (float)SPAN_SUBDIV;
+	sdivz8stepu = rec->sdivzstepu * (float)SPAN_SUBDIV;
+	tdivz8stepu = rec->tdivzstepu * (float)SPAN_SUBDIV;
+	zi8stepu = rec->zistepu * (float)SPAN_SUBDIV;
 
 	do
 	{
@@ -188,9 +202,9 @@ static void D_DrawSpans8Job (const job_t *job)
 		du = (float)pspan->u;
 		dv = (float)pspan->v;
 
-		sdivz = job->sdivzorigin + dv*job->sdivzstepv + du*job->sdivzstepu;
-		tdivz = job->tdivzorigin + dv*job->tdivzstepv + du*job->tdivzstepu;
-		zi = job->ziorigin + dv*job->zistepv + du*job->zistepu;
+		sdivz = rec->sdivzorigin + dv*rec->sdivzstepv + du*rec->sdivzstepu;
+		tdivz = rec->tdivzorigin + dv*rec->tdivzstepv + du*rec->tdivzstepu;
+		zi = rec->ziorigin + dv*rec->zistepv + du*rec->zistepu;
 		z = k65536 / zi;	// prescale to 16.16 fixed-point
 
 		s = (int)(sdivz * z) + sadjust;
@@ -244,9 +258,9 @@ static void D_DrawSpans8Job (const job_t *job)
 				else if (count > 1)
 				{
 					spancountminus1 = (float)(count - 1);
-					sdivz += job->sdivzstepu * spancountminus1;
-					tdivz += job->tdivzstepu * spancountminus1;
-					zi += job->zistepu * spancountminus1;
+					sdivz += rec->sdivzstepu * spancountminus1;
+					tdivz += rec->tdivzstepu * spancountminus1;
+					zi += rec->zistepu * spancountminus1;
 					__asm__ volatile ("fdiv.s %0, %1, %2" : "=f"(z_next) : "f"(k65536), "f"(zi));
 				}
 
@@ -286,9 +300,9 @@ static void D_DrawSpans8Job (const job_t *job)
 				continue;
 			}
 			spancountminus1 = (float)(count - 1);
-			sdivz += job->sdivzstepu * spancountminus1;
-			tdivz += job->tdivzstepu * spancountminus1;
-			zi += job->zistepu * spancountminus1;
+			sdivz += rec->sdivzstepu * spancountminus1;
+			tdivz += rec->tdivzstepu * spancountminus1;
+			zi += rec->zistepu * spancountminus1;
 			z = k65536 / zi;
 		}
 
@@ -321,6 +335,8 @@ static void D_DrawSpans8Job (const job_t *job)
 
 static void D_RunJob (job_t *job, int core)
 {
+	const jobrec_t	*rec = &recs[job->rec];
+
 	if (job->build_idx >= 0)
 	{
 		if (core)
@@ -341,9 +357,9 @@ static void D_RunJob (job_t *job, int core)
 		if (job->waitjob >= 0)
 			while (__atomic_load_n (&jobdone[job->waitjob], __ATOMIC_ACQUIRE) != frame_gen)
 				;
-		D_DrawSpans8Job (job);
+		D_DrawSpans8Job (job, rec);
 	}
-	D_DrawZSpansJob (job);
+	D_DrawZSpansJob (job, rec);
 }
 
 /*
@@ -456,6 +472,7 @@ void D_JobsBeginFrame (void)
 	frame_task = xTaskGetCurrentTaskHandle ();
 	numjobs = 0;
 	numbuilds = 0;
+	numrecs = 0;
 	nextjob = 0;
 	jobs_closed = 0;
 	jobs_active = true;
@@ -477,9 +494,11 @@ by *ds first if needbuild. Returns false if no frame is active or the queue is f
 which case the caller draws the surface itself.
 */
 qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
-		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob)
+		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob, int surf)
 {
-	job_t	*job;
+	job_t		*job;
+	jobrec_t	*rec;
+	int			r;
 
 	if (!jobs_active)
 		return false;
@@ -488,29 +507,56 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 		refused++;
 		return false;
 	}
+
+// the surface's record from an earlier flush this frame, if it still matches
+	r = -1;
+	if (surf >= 0 && surf < NUMSTACKSURFACES)
+	{
+		r = recof[surf];
+		if (r < 0 || r >= numrecs || recs[r].surf != surf || recs[r].ziorigin != ziorigin ||
+			(recs[r].cacheblock != NULL) != (color != 0) ||
+			(color && (recs[r].cacheblock != cacheblock || recs[r].sdivzorigin != d_sdivzorigin)))
+			r = -1;
+	}
+	if (r < 0)
+	{
+		if (numrecs >= MAX_RECS)
+		{
+			refused++;
+			return false;
+		}
+		r = numrecs++;
+		rec = &recs[r];
+		rec->ziorigin = ziorigin;
+		rec->zistepu = zistepu;
+		rec->zistepv = zistepv;
+		rec->surf = (int16_t)surf;
+		rec->cacheblock = NULL;
+		if (color)
+		{
+			rec->cacheblock = cacheblock;
+			rec->cachewidth = (int16_t)cachewidth;
+			rec->sdivzorigin = d_sdivzorigin;
+			rec->sdivzstepu = d_sdivzstepu;
+			rec->sdivzstepv = d_sdivzstepv;
+			rec->tdivzorigin = d_tdivzorigin;
+			rec->tdivzstepu = d_tdivzstepu;
+			rec->tdivzstepv = d_tdivzstepv;
+			rec->sadjust = sadjust;
+			rec->tadjust = tadjust;
+			rec->bbextents = bbextents;
+			rec->bbextentt = bbextentt;
+		}
+		if (surf >= 0 && surf < NUMSTACKSURFACES)
+			recof[surf] = (int16_t)r;
+	}
+
 	job = &jobs[numjobs];
 	job->spans = spans;
-	job->ziorigin = ziorigin;
-	job->zistepu = zistepu;
-	job->zistepv = zistepv;
+	job->viewbuffer = d_viewbuffer;
+	job->rec = (int16_t)r;
 	job->color = color ? 1 : 0;
 	job->waitjob = (int16_t)waitjob;
-	if (color)
-	{
-		job->cacheblock = cacheblock;
-		job->viewbuffer = d_viewbuffer;
-		job->cachewidth = (int16_t)cachewidth;
-		job->sdivzorigin = d_sdivzorigin;
-		job->sdivzstepu = d_sdivzstepu;
-		job->sdivzstepv = d_sdivzstepv;
-		job->tdivzorigin = d_tdivzorigin;
-		job->tdivzstepu = d_tdivzstepu;
-		job->tdivzstepv = d_tdivzstepv;
-		job->sadjust = sadjust;
-		job->tadjust = tadjust;
-		job->bbextents = bbextents;
-		job->bbextentt = bbextentt;
-	}
 	if (needbuild)
 	{
 		job->build_idx = (int16_t)numbuilds;
@@ -582,8 +628,6 @@ void D_JobsEndFrame (void)
 	D_WakeWorker ();
 	if (numjobs > d_peak_jobs)
 		d_peak_jobs = numjobs;
-	if (numbuilds > d_peak_builds)
-		d_peak_builds = numbuilds;
 	if (numjobs + refused > d_peak_demand)
 		d_peak_demand = numjobs + refused;
 	d_stat_frames++;
@@ -593,6 +637,10 @@ void D_JobsEndFrame (void)
 		d_refused_total += refused;
 	}
 	refused = 0;
+	if (numbuilds > d_peak_builds)
+		d_peak_builds = numbuilds;
+	if (numrecs > d_peak_recs)
+		d_peak_recs = numrecs;
 	D_RunJobs (0, gen);
 	while (__atomic_load_n (&done_gen, __ATOMIC_ACQUIRE) != gen)
 		ulTaskNotifyTake (pdTRUE, pdMS_TO_TICKS (10));

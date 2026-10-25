@@ -115,7 +115,7 @@ void R_ComputeZRows (void);
 void D_JobsBeginFrame (void);
 int D_JobsCount (void);
 qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
-		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob);
+		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob, int surf);
 void D_JobsPublished (void);
 void D_JobsWaitRange (int first, int last);
 void D_JobsEndFrame (void);
