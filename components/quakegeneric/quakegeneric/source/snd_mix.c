@@ -25,32 +25,30 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #define	PAINTBUFFER_SIZE	512
 EXT_RAM_BSS_ATTR portable_samplepair_t paintbuffer[PAINTBUFFER_SIZE];
-EXT_RAM_BSS_ATTR int		snd_scaletable[32][256];
 int 	*snd_p, snd_linear_count, snd_vol;
 short	*snd_out;
 
 void Snd_WriteLinearBlastStereo16 (void)
 {
 	int		i;
-	int		val;
+	int		l, r;
+	uint32_t	*out = (uint32_t *)snd_out;	// a stereo pair per 32-bit store
 
 	for (i=0 ; i<snd_linear_count ; i+=2)
 	{
-		val = (snd_p[i]*snd_vol)>>8;
-		if (val > 0x7fff)
-			snd_out[i] = 0x7fff;
-		else if (val < (short)0x8000)
-			snd_out[i] = (short)0x8000;
-		else
-			snd_out[i] = val;
+		l = (snd_p[i]*snd_vol)>>8;
+		if (l > 0x7fff)
+			l = 0x7fff;
+		else if (l < -0x8000)
+			l = -0x8000;
 
-		val = (snd_p[i+1]*snd_vol)>>8;
-		if (val > 0x7fff)
-			snd_out[i+1] = 0x7fff;
-		else if (val < (short)0x8000)
-			snd_out[i+1] = (short)0x8000;
-		else
-			snd_out[i+1] = val;
+		r = (snd_p[i+1]*snd_vol)>>8;
+		if (r > 0x7fff)
+			r = 0x7fff;
+		else if (r < -0x8000)
+			r = -0x8000;
+
+		*out++ = (uint16_t)l | ((uint32_t)r << 16);
 	}
 }
 
@@ -236,19 +234,17 @@ void S_PaintChannels(int endtime)
 
 void SND_InitScaletable (void)
 {
-	int		i, j;
-	
-	for (i=0 ; i<32 ; i++)
-		for (j=0 ; j<256 ; j++)
-			snd_scaletable[i][j] = ((signed char)j) * i * 8;
+	// (ESP32-P4 port: no table; SND_PaintChannelFrom8 multiplies, which gives the same
+	// values, snd_scaletable[v >> 3][j] = (signed char)j * (v & ~7), without a 32 KB
+	// PSRAM lookup per sample)
 }
 
 
 void SND_PaintChannelFrom8 (channel_t *ch, sfxcache_t *sc, int count)
 {
 	int 	data;
-	int		*lscale, *rscale;
-	unsigned char *sfx;
+	int		lvol, rvol;
+	signed char *sfx;
 	int		i;
 
 	if (ch->leftvol > 255)
@@ -256,15 +252,15 @@ void SND_PaintChannelFrom8 (channel_t *ch, sfxcache_t *sc, int count)
 	if (ch->rightvol > 255)
 		ch->rightvol = 255;
 		
-	lscale = snd_scaletable[ch->leftvol >> 3];
-	rscale = snd_scaletable[ch->rightvol >> 3];
+	lvol = ch->leftvol & ~7;		// the scale table's 32 volume steps
+	rvol = ch->rightvol & ~7;
 	sfx = (signed char *)sc->data + ch->pos;
 
 	for (i=0 ; i<count ; i++)
 	{
 		data = sfx[i];
-		paintbuffer[i].left += lscale[data];
-		paintbuffer[i].right += rscale[data];
+		paintbuffer[i].left += data * lvol;
+		paintbuffer[i].right += data * rvol;
 	}
 	
 	ch->pos += count;

@@ -1144,3 +1144,20 @@ earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach,
   (main/ isn't built with -fsingle-precision-constant). Fixed `printf("%f", int)` in audio.c.
 - Remaining double code in play: only __extendsfdf2 for float arguments to printf/Sys_Error.
 - **52.33 fps (+0.9% vs 51.88)** (524 frames / 10.01 s). Kept.
+
+### Candidate 7 (NEW_OPTIMIZATION_CANDIDATES.md), remaining items
+- Already tried and logged as noise earlier: 32-bit loads/stores in R_DrawSurfaceBlock8 (twice)
+  and a reciprocal table for the span-tail divisions. Not repeated. The double/ceilf item
+  was done in the previous commit.
+- Skipped (estimated below the ~0.3% noise floor):
+  - R_MakeSky 4-pixel words: it only rebuilds when (int)(skytime*skyspeed) changes, i.e.
+    8 times a second (skyspeed 8), so ~1 frame in 7.
+  - R_BuildLightMap 4-wide: ~11.6 builds x ~100 samples x 1-4 styles per frame, ~0.03 ms.
+- Audio mixer (snd_mix.c): SND_PaintChannelFrom8 multiplies instead of looking every 8-bit
+  sample up in snd_scaletable[32][256] (32 KB in PSRAM; same values: (signed char)j *
+  (vol & ~7)); the table is gone. Snd_WriteLinearBlastStereo16 writes each stereo pair with
+  one 32-bit store.
+  - With paintbuffer (4 KB) also moved to internal RAM: 52.63 fps, but internal RAM free
+    42.5 -> 38.4 KB, largest block 32 -> 21.5 KB (the USB/SD margin).
+  - paintbuffer left in PSRAM: **52.62 fps (+0.6% vs 52.33)** (527 frames / 10.01 s),
+    internal RAM unchanged (42.5 KB, largest 32 KB). Kept.
