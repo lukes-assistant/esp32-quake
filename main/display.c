@@ -305,8 +305,9 @@ static void draw_task(void *param) {
 		}
 		xSemaphoreGive(drawing_mux);
 		profile_display_times(esp_timer_get_time()-start_us, 0);
-		//do a draw to trigger cache write-back and the fb flip
-		esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, lcdbuf[cur_buf]);
+		//draw_bitmap on its own frame buffer only flips to it and writes back the given rows; the
+		//PPA/2D-DMA wrote the frame (the CPU has no dirty lines in it), so one row is enough
+		esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, LCD_H_RES, 1, lcdbuf[cur_buf]);
 		cur_buf=cur_buf?0:1;
 	}
 #else

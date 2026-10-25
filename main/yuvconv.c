@@ -91,11 +91,15 @@ static void desc_2d(dma2d_descriptor_t *d, void *buf, int rows, int pbyte, int e
 }
 
 //start converting chunk buffer `slot` (rows of RGB888) into the YUV422 rows at dst
-static esp_err_t m2m_start(int slot, uint8_t *dst, int rows) {
+static esp_err_t m2m_start(int slot, uint8_t *dst, int rows, int cpu_touched) {
 	const color_space_pixel_format_t rgb={ .color_space=COLOR_SPACE_RGB, .pixel_format=COLOR_PIXEL_RGB888 };
 	const color_space_pixel_format_t yuv={ .color_space=COLOR_SPACE_YUV, .pixel_format=COLOR_PIXEL_YUV422 };
-	esp_cache_msync(chunkbuf[slot], W*rows*3, ESP_CACHE_MSYNC_FLAG_DIR_C2M|ESP_CACHE_MSYNC_FLAG_UNALIGNED);
-	esp_cache_msync(dst, W*rows*2, ESP_CACHE_MSYNC_FLAG_DIR_M2C);	//(rows are line-aligned)
+	// in normal frames only the PPA and the 2D-DMA touch the chunk and the display rows: no
+	// cache maintenance (the start-up test writes the chunk with the CPU)
+	if (cpu_touched) {
+		esp_cache_msync(chunkbuf[slot], W*rows*3, ESP_CACHE_MSYNC_FLAG_DIR_C2M|ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+		esp_cache_msync(dst, W*rows*2, ESP_CACHE_MSYNC_FLAG_DIR_M2C);	//(rows are line-aligned)
+	}
 	desc_2d(&tx_desc[slot], chunkbuf[slot], rows, dma2d_desc_pixel_format_to_pbyte_value(rgb), 1);
 	desc_2d(&rx_desc[slot], dst, rows, dma2d_desc_pixel_format_to_pbyte_value(yuv), 0);
 	esp_cache_msync(&tx_desc[slot], sizeof(dma2d_descriptor_t), ESP_CACHE_MSYNC_FLAG_DIR_C2M|ESP_CACHE_MSYNC_FLAG_UNALIGNED);
@@ -128,7 +132,7 @@ int yuvconv_test_rgb(const uint8_t rgb[][3], int n, uint8_t *out_yuv, uint8_t *d
 		const uint8_t *c=rgb[(i%W)*n/W];
 		chunkbuf[0][i*3+0]=c[2]; chunkbuf[0][i*3+1]=c[1]; chunkbuf[0][i*3+2]=c[0];	//B,G,R as the PPA writes
 	}
-	if (m2m_start(0, dst_psram, CHUNK_ROWS)!=ESP_OK) return 0;
+	if (m2m_start(0, dst_psram, CHUNK_ROWS, 1)!=ESP_OK) return 0;
 	if (xSemaphoreTake(done_sem[0], pdMS_TO_TICKS(100))!=pdTRUE) return 0;
 	memcpy(out_yuv, dst_psram, W*2);
 	return 1;
@@ -139,7 +143,7 @@ int yuvconv_frame(const uint8_t *l8, uint8_t *yuv, yuvconv_chunk_fn ppa_chunk) {
 	//2D-DMA channels anyway, and each operation has a fixed CPU cost, so fewer, larger chunks
 	for (int c=0; c<NCHUNKS; c++) {
 		if (!ppa_chunk(l8, c*CHUNK_ROWS, CHUNK_ROWS, chunkbuf[0])) { printf("YUVDBG chunk %d: ppa failed\n", c); return 0; }
-		esp_err_t e=m2m_start(0, yuv+c*CHUNK_ROWS*W*2, CHUNK_ROWS);
+		esp_err_t e=m2m_start(0, yuv+c*CHUNK_ROWS*W*2, CHUNK_ROWS, 0);
 		if (e!=ESP_OK) { printf("YUVDBG chunk %d: m2m enqueue %s\n", c, esp_err_to_name(e)); return 0; }
 		if (xSemaphoreTake(done_sem[0], pdMS_TO_TICKS(100))!=pdTRUE) { printf("YUVDBG chunk %d: m2m timeout\n", c); return 0; }
 	}

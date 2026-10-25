@@ -962,3 +962,37 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
   the CPU would otherwise wait for them (the frame buffer's write-allocate fills); it doesn't
   reduce traffic. Real gains need traffic that disappears (data that never leaves SRAM).
 
+## 2026-10-25 — YUV422 display buffers (branch yuv-display)
+
+### Findings
+- RGB565 -> RGB888 in the DSI bridge is not possible on chip revision 1.0: the output-type
+  field (pixel_type bits 7-10 on revision 3) doesn't exist; written bits don't read back,
+  while the documented bits 0 and 6 do.
+- But the bridge converts **YUV422 -> RGB888** on revision 1 (data_in_type = 1, raw_type = 0
+  for RGB888 out). Verified on the monitor with colour bars and a grey ramp: byte order UYVY,
+  yuv_cfg.yuv422_format = 0 with yuv_pix_endian = 1 (with endian 0 every 4-pixel group was
+  mirrored left-right; the colour bars hid it, the user spotted it in game).
+- A 16-bit display buffer: scan-out 37 instead of 55 MB/s, conversion writes 600 instead of
+  900 KB per frame. Upper bound measured with the PPA writing 600 KB into 16-bit buffers:
+  **51.34 fps (+2.7% vs 50.0)**, conversion 3.9 ms.
+- The PPA can't write YUV before ECO5, so conversion is two hardware steps per 32-row chunk:
+  PPA blend L8 -> RGB888 into a 61 KB SRAM chunk, then 2D-DMA M2M with TX colour conversion
+  RGB888 -> YUV422 (BT.601) into the display buffer. Its output byte order is UYVY with the
+  exact expected values (start-up check with colour bars, a per-pixel grey ramp and an
+  end-to-end 8-bit pattern).
+
+### Results
+- 16-row chunks, double buffered (60 hardware operations per frame): 47.44 fps; core 1 spent
+  ~13% in driver overhead (critical sections, ISR checks, dma2d_connect, cache syncs).
+- 32-row chunks, sequential (30 operations): **49.10 fps**, conversion 9.5 ms.
+- Overlap attempt (non-sibling channels so PPA and copy can run concurrently: the PPA takes
+  TX 0+1 and RX 0; a sibling pair would need RX 2, absent on revision 1): **33.4 fps**,
+  conversion 17.9 ms -- they contend rather than overlap. Reverted.
+- No cache maintenance on memory only the DMA engines touch, and draw_bitmap flipping with one
+  row instead of writing back the whole 600 KB buffer: **49.32 fps**. Remaining overhead ~9% of
+  core 1 in the PPA/2D-DMA drivers. (The one-row flip on the RGB888 main branch: 49.96, no
+  change.)
+- Net: the YUV path is currently ~1.5% slower than RGB888 (50.0). Making it a win needs a lean
+  driver that keeps the 2D-DMA channels across chunks (the pool frees them on every EOF
+  interrupt), for an estimated net +2%.
+
