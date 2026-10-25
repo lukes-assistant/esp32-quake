@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "esp_attr.h"
 #include "r_local.h"
+#include "r_pipe.h"
 
 //define	PASSAGES
 
@@ -202,6 +203,11 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_waterwarp);
 	Cvar_RegisterVariable (&r_fullbright);
 	Cvar_RegisterVariable (&r_drawentities);
+	{
+		extern cvar_t	r_pipeline;
+
+		Cvar_RegisterVariable (&r_pipeline);
+	}
 	Cvar_RegisterVariable (&r_drawviewmodel);
 	Cvar_RegisterVariable (&r_aliasstats);
 	Cvar_RegisterVariable (&r_dspeeds);
@@ -1033,6 +1039,7 @@ void R_DrawEntitiesAndViewModel (void)
 	static float	lightvec[3] = {-1, 0, 0};	// FIXME: remove and do real lighting
 	int				i, count = 0, saved_right;
 	refdef_t		refdef_c1;
+	qboolean		deferred = R_PipeDefer3D ();
 
 	if (r_drawentities.value)
 	{
@@ -1067,7 +1074,11 @@ void R_DrawEntitiesAndViewModel (void)
 		count++;
 	}
 
-	if (count)
+	if (count && deferred)
+	{
+		R_PipeAddAlias (items, count);	// all drawn by core 1 later (r_pipe.c)
+	}
+	else if (count)
 	{
 	// left half of the columns on core 0, right half on core 1
 		refdef_c1 = r_refdef;
@@ -1076,6 +1087,7 @@ void R_DrawEntitiesAndViewModel (void)
 		r_refdef.aliasvrectright = refdef_c1.aliasvrect.x;
 
 		r_alias_split = true;
+		R_PipeSnapshotView ();
 		R_AliasC1Start (items, count, &refdef_c1);
 		R_DrawAliasItems (items, count);
 		R_AliasC1Wait ();
@@ -1181,6 +1193,9 @@ SetVisibilityByPassages ();
 		D_WarpScreen ();
 
 	V_SetContentsColor (r_viewleaf->contents);
+
+	// the rest of the frame (2D, present) is recorded for core 1
+	R_PipeStartRecording ();
 
 	if (r_timegraph.value)
 		R_TimeGraph ();

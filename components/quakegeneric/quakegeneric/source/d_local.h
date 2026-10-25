@@ -118,5 +118,7 @@ void D_JobsPublished (void);
 void D_JobsWaitRange (int first, int last);
 void D_JobsEndFrame (void);
 void D_JobsWaitAll (void);
+void D_JobsWakeWorker (void);
+void D_SetZBuffer (short *zbuffer);
 surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds);
 

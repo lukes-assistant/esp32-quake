@@ -23,6 +23,8 @@ with the gradients passed in instead of read from globals.
 
 #include "quakedef.h"
 #include "d_local.h"
+#include "r_local.h"
+#include "r_pipe.h"
 #include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -362,6 +364,17 @@ static qboolean D_NewFrame (void *arg)
 	return __atomic_load_n (&frame_gen, __ATOMIC_SEQ_CST) != *(uint32_t *)arg;
 }
 
+static qboolean D_NewFrameOrPipe (void *arg)
+{
+	return D_NewFrame (arg) || R_PipePending ();
+}
+
+// core 0 has handed over a frame to finish (r_pipe.c)
+void D_JobsWakeWorker (void)
+{
+	D_WakeWorker ();
+}
+
 /*
 D_RunJobs
 
@@ -395,8 +408,13 @@ static void D_WorkerTask (void *arg)
 
 	for (;;)
 	{
-		while (!D_NewFrame (&my_gen))
-			D_WorkerSleepUnless (D_NewFrame, &my_gen);
+		while (!D_NewFrameOrPipe (&my_gen))
+			D_WorkerSleepUnless (D_NewFrameOrPipe, &my_gen);
+		if (R_PipePending ())
+		{
+			R_PipeRun ();	// finish the previous frame (r_pipe.c)
+			continue;
+		}
 		my_gen = __atomic_load_n (&frame_gen, __ATOMIC_ACQUIRE);
 
 		D_RunJobs (1, my_gen);
@@ -409,7 +427,7 @@ static void D_WorkerTask (void *arg)
 void D_JobsBeginFrame (void)
 {
 	if (!worker_task)
-		xTaskCreatePinnedToCore (D_WorkerTask, "d_jobs", 4096, NULL, JOBS_PRIORITY, &worker_task, JOBS_CORE);
+		xTaskCreatePinnedToCore (D_WorkerTask, "d_jobs", 8192, NULL, JOBS_PRIORITY, &worker_task, JOBS_CORE);
 	frame_task = xTaskGetCurrentTaskHandle ();
 	numjobs = 0;
 	nextjob = 0;

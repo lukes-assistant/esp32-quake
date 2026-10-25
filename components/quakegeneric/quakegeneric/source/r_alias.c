@@ -48,6 +48,14 @@ static float		ziscale;
 // per copy of this file (r_alias_c1.c compiles it again for core 1), so the two cores don't
 // share it; it used to be a field of entity_t
 static int			alias_trivial_accept;
+// the entity being drawn is the view model (entities may be snapshots, see r_pipe.c, so
+// this can't compare with &cl.viewent)
+static qboolean		alias_viewmodel;
+
+// time for animation (a snapshot on core 1, see view_c1_names.h)
+#ifndef R_ALIAS_TIME
+#define R_ALIAS_TIME	cl.time
+#endif
 static model_t		*pmodel;
 
 static vec3_t		alias_forward, alias_right, alias_up;
@@ -594,7 +602,7 @@ void R_AliasSetupSkin (void)
 		numskins = paliasskingroup->numskins;
 		fullskininterval = pskinintervals[numskins-1];
 	
-		skintime = cl.time + currententity->syncbase;
+		skintime = R_ALIAS_TIME + currententity->syncbase;
 	
 	// when loading in Mod_LoadAliasSkinGroup, we guaranteed all interval
 	// values are positive, so we don't have to worry about division by 0
@@ -684,7 +692,7 @@ void R_AliasSetupFrame (void)
 	numframes = paliasgroup->numframes;
 	fullinterval = pintervals[numframes-1];
 
-	time = cl.time + currententity->syncbase;
+	time = R_ALIAS_TIME + currententity->syncbase;
 
 //
 // when loading in Mod_LoadAliasGroup, we guaranteed all interval values
@@ -747,7 +755,7 @@ void R_AliasDrawModel (alight_t *plighting)
 
 	acolormap = currententity->colormap;
 
-	if (currententity != &cl.viewent)
+	if (!alias_viewmodel)
 		ziscale = (float)0x8000 * (float)0x10000;
 	else
 		ziscale = (float)0x8000 * (float)0x10000 * 3.0;
@@ -774,6 +782,7 @@ void R_DrawAliasItems (aliasitem_t *items, int count)
 	for (i = 0 ; i < count ; i++)
 	{
 		currententity = items[i].entity;
+		alias_viewmodel = items[i].viewmodel;
 		VectorSubtract (r_origin, currententity->origin, modelorg);
 		if (!items[i].viewmodel && !R_AliasCheckBBox ())
 			continue;

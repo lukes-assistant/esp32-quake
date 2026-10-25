@@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // vid buffer
 
 #include "quakedef.h"
+#include "r_local.h"
+#include "r_pipe.h"
 #include "esp_attr.h"
 
 
@@ -134,7 +136,7 @@ It can be clipped to the top of the screen to allow the console to be
 smoothly scrolled off.
 ================
 */
-void Draw_Character (int x, int y, int num)
+static void Draw_Character_exec (byte *dbuf, int x, int y, int num)
 {
 	byte			*dest;
 	byte			*source;
@@ -167,7 +169,7 @@ void Draw_Character (int x, int y, int num)
 	else
 		drawline = 8;
 
-	dest = vid.conbuffer + y*vid.conrowbytes + x;
+	dest = dbuf + y*vid.conrowbytes + x;
 	
 	while (drawline--)
 	{
@@ -255,7 +257,7 @@ void Draw_DebugChar (char num)
 Draw_Pic
 =============
 */
-void Draw_Pic (int x, int y, qpic_t *pic)
+static void Draw_Pic_exec (byte *dbuf, int x, int y, qpic_t *pic)
 {
 	byte			*dest, *source;
 	unsigned short	*pusdest;
@@ -271,7 +273,7 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 
 	source = pic->data;
 
-	dest = vid.buffer + y * vid.rowbytes + x;
+	dest = dbuf + y * vid.rowbytes + x;
 
 	for (v=0 ; v<pic->height ; v++)
 	{
@@ -287,7 +289,7 @@ void Draw_Pic (int x, int y, qpic_t *pic)
 Draw_TransPic
 =============
 */
-void Draw_TransPic (int x, int y, qpic_t *pic)
+static void Draw_TransPic_exec (byte *dbuf, int x, int y, qpic_t *pic)
 {
 	byte	*dest, *source, tbyte;
 	unsigned short	*pusdest;
@@ -301,7 +303,7 @@ void Draw_TransPic (int x, int y, qpic_t *pic)
 		
 	source = pic->data;
 
-	dest = vid.buffer + y * vid.rowbytes + x;
+	dest = dbuf + y * vid.rowbytes + x;
 
 	if (pic->width & 7)
 	{	// general
@@ -351,7 +353,7 @@ void Draw_TransPic (int x, int y, qpic_t *pic)
 Draw_TransPicTranslate
 =============
 */
-void Draw_TransPicTranslate (int x, int y, qpic_t *pic, byte *translation)
+static void Draw_TransPicTranslate_exec (byte *dbuf, int x, int y, qpic_t *pic, const byte *translation)
 {
 	byte	*dest, *source, tbyte;
 	unsigned short	*pusdest;
@@ -365,7 +367,7 @@ void Draw_TransPicTranslate (int x, int y, qpic_t *pic, byte *translation)
 		
 	source = pic->data;
 
-	dest = vid.buffer + y * vid.rowbytes + x;
+	dest = dbuf + y * vid.rowbytes + x;
 
 	if (pic->width & 7)
 	{	// general
@@ -439,16 +441,13 @@ Draw_ConsoleBackground
 
 ================
 */
-void Draw_ConsoleBackground (int lines)
+static void Draw_ConsoleBackground_exec (byte *dbuf, int lines, qpic_t *conback)
 {
 	int				x, y, v;
 	byte			*src, *dest;
 	unsigned short	*pusdest;
 	int				f, fstep;
-	qpic_t			*conback;
 	char			ver[100];
-
-	conback = Draw_CachePic ("gfx/conback.lmp");
 
 // hack the version number directly into the pic
 	dest = conback->data + 320 - 43 + 320*186;
@@ -458,7 +457,7 @@ void Draw_ConsoleBackground (int lines)
 		Draw_CharToConback (ver[x], dest+(x<<3));
 	
 // draw the pic
-	dest = vid.conbuffer;
+	dest = dbuf;
 
 	for (y=0 ; y<lines ; y++, dest += vid.conrowbytes)
 	{
@@ -491,14 +490,14 @@ void Draw_ConsoleBackground (int lines)
 R_DrawRect
 ==============
 */
-void R_DrawRect (vrect_t *prect, int rowbytes, byte *psrc,
+static void R_DrawRect (byte *dbuf, vrect_t *prect, int rowbytes, byte *psrc,
 	int transparent)
 {
 	byte	t;
 	int		i, j, srcdelta, destdelta;
 	byte	*pdest;
 
-	pdest = vid.buffer + (prect->y * vid.rowbytes) + prect->x;
+	pdest = dbuf + (prect->y * vid.rowbytes) + prect->x;
 
 	srcdelta = rowbytes - prect->width;
 	destdelta = vid.rowbytes - prect->width;
@@ -542,26 +541,26 @@ This repeats a 64*64 tile graphic to fill the screen around a sized down
 refresh window.
 =============
 */
-void Draw_TileClear (int x, int y, int w, int h)
+static void Draw_TileClear_exec (byte *dbuf, int x, int y, int w, int h)
 {
 	int				width, height, tileoffsetx, tileoffsety;
 	byte			*psrc;
-	vrect_t			vr;
+	vrect_t			vr, rect;	// (rect was in r_rectdesc: not shared by the cores)
 
-	r_rectdesc.rect.x = x;
-	r_rectdesc.rect.y = y;
-	r_rectdesc.rect.width = w;
-	r_rectdesc.rect.height = h;
+	rect.x = x;
+	rect.y = y;
+	rect.width = w;
+	rect.height = h;
 
-	vr.y = r_rectdesc.rect.y;
-	height = r_rectdesc.rect.height;
+	vr.y = rect.y;
+	height = rect.height;
 
 	tileoffsety = vr.y % r_rectdesc.height;
 
 	while (height > 0)
 	{
-		vr.x = r_rectdesc.rect.x;
-		width = r_rectdesc.rect.width;
+		vr.x = rect.x;
+		width = rect.width;
 
 		if (tileoffsety != 0)
 			vr.height = r_rectdesc.height - tileoffsety;
@@ -586,7 +585,7 @@ void Draw_TileClear (int x, int y, int w, int h)
 			psrc = r_rectdesc.ptexbytes +
 					(tileoffsety * r_rectdesc.rowbytes) + tileoffsetx;
 
-			R_DrawRect (&vr, r_rectdesc.rowbytes, psrc, 0);
+			R_DrawRect (dbuf, &vr, r_rectdesc.rowbytes, psrc, 0);
 
 			vr.x += vr.width;
 			width -= vr.width;
@@ -607,14 +606,14 @@ Draw_Fill
 Fills a box of pixels with a single color
 =============
 */
-void Draw_Fill (int x, int y, int w, int h, int c)
+static void Draw_Fill_exec (byte *dbuf, int x, int y, int w, int h, int c)
 {
 	byte			*dest;
 	unsigned short	*pusdest;
 	unsigned		uc;
 	int				u, v;
 
-	dest = vid.buffer + y*vid.rowbytes + x;
+	dest = dbuf + y*vid.rowbytes + x;
 	for (v=0 ; v<h ; v++, dest += vid.rowbytes)
 		for (u=0 ; u<w ; u++)
 			dest[u] = c;
@@ -627,20 +626,17 @@ Draw_FadeScreen
 
 ================
 */
-void Draw_FadeScreen (void)
+static void Draw_FadeScreen_exec (byte *dbuf)
 {
 	int			x,y;
 	byte		*pbuf;
 
-	VID_UnlockBuffer ();
-	S_ExtraUpdate ();
-	VID_LockBuffer ();
 
 	for (y=0 ; y<vid.height ; y++)
 	{
 		int	t;
 
-		pbuf = (byte *)(vid.buffer + vid.rowbytes*y);
+		pbuf = (byte *)(dbuf + vid.rowbytes*y);
 		t = (y & 1) << 1;
 
 		for (x=0 ; x<vid.width ; x++)
@@ -650,9 +646,6 @@ void Draw_FadeScreen (void)
 		}
 	}
 
-	VID_UnlockBuffer ();
-	S_ExtraUpdate ();
-	VID_LockBuffer ();
 }
 
 //=============================================================================
@@ -686,3 +679,99 @@ void Draw_EndDisc (void)
 	D_EndDirectRect (vid.width - 24, 0, 24, 24);
 }
 
+
+//=============================================================================
+// ESP32-P4 port: the entry points either record the call for core 1 (r_pipe.c) or draw
+// into the current frame buffer right away
+
+void Draw_Character (int x, int y, int num)
+{
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_CHARACTER, x, y, num, 0, NULL, NULL);
+	else
+		Draw_Character_exec (vid.conbuffer, x, y, num);
+}
+
+void Draw_Pic (int x, int y, qpic_t *pic)
+{
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_PIC, x, y, 0, 0, pic, NULL);
+	else
+		Draw_Pic_exec (vid.buffer, x, y, pic);
+}
+
+void Draw_TransPic (int x, int y, qpic_t *pic)
+{
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_TRANSPIC, x, y, 0, 0, pic, NULL);
+	else
+		Draw_TransPic_exec (vid.buffer, x, y, pic);
+}
+
+void Draw_TransPicTranslate (int x, int y, qpic_t *pic, byte *translation)
+{
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_TRANSPICTRANSLATE, x, y, 0, 0, pic, translation);
+	else
+		Draw_TransPicTranslate_exec (vid.buffer, x, y, pic, translation);
+}
+
+void Draw_ConsoleBackground (int lines)
+{
+	qpic_t	*conback = Draw_CachePic ("gfx/conback.lmp");
+
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_CONSOLEBACKGROUND, 0, 0, lines, 0, conback, NULL);
+	else
+		Draw_ConsoleBackground_exec (vid.conbuffer, lines, conback);
+}
+
+void Draw_TileClear (int x, int y, int w, int h)
+{
+	if (r_pipe_recording)
+		R_PipeRecord2D (DC_TILECLEAR, x, y, w, h, NULL, NULL);
+	else
+		Draw_TileClear_exec (vid.buffer, x, y, w, h);
+}
+
+void Draw_Fill (int x, int y, int w, int h, int c)
+{
+	if (r_pipe_recording)
+	{
+		R_PipeRecord2D (DC_FILL, x, y, w, h, (void *)(intptr_t)c, NULL);
+		return;
+	}
+	Draw_Fill_exec (vid.buffer, x, y, w, h, c);
+}
+
+void Draw_FadeScreen (void)
+{
+	if (r_pipe_recording)
+	{
+		R_PipeRecord2D (DC_FADESCREEN, 0, 0, 0, 0, NULL, NULL);
+		return;
+	}
+	VID_UnlockBuffer ();
+	S_ExtraUpdate ();
+	VID_LockBuffer ();
+	Draw_FadeScreen_exec (vid.buffer);
+	VID_UnlockBuffer ();
+	S_ExtraUpdate ();
+	VID_LockBuffer ();
+}
+
+// run a recorded call (core 1)
+void Draw_Exec (byte *dbuf, const drawcmd_t *c)
+{
+	switch (c->op)
+	{
+	case DC_CHARACTER:			Draw_Character_exec (dbuf, c->x, c->y, c->w); break;
+	case DC_PIC:				Draw_Pic_exec (dbuf, c->x, c->y, c->p); break;
+	case DC_TRANSPIC:			Draw_TransPic_exec (dbuf, c->x, c->y, c->p); break;
+	case DC_TRANSPICTRANSLATE:	Draw_TransPicTranslate_exec (dbuf, c->x, c->y, c->p, c->translation); break;
+	case DC_CONSOLEBACKGROUND:	Draw_ConsoleBackground_exec (dbuf, c->w, c->p); break;
+	case DC_TILECLEAR:			Draw_TileClear_exec (dbuf, c->x, c->y, c->w, c->h); break;
+	case DC_FILL:				Draw_Fill_exec (dbuf, c->x, c->y, c->w, c->h, (int)(intptr_t)c->p); break;
+	case DC_FADESCREEN:			Draw_FadeScreen_exec (dbuf); break;
+	}
+}

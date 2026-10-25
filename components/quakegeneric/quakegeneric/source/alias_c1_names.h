@@ -7,6 +7,8 @@ the shared state they write (currententity, modelorg, r_refdef, the rasteriser e
 and Mod_Extradata (core 1 must not touch the model cache LRU; it gets a read-only version).
 */
 
+#include "view_c1_names.h"
+
 #define acolormap                            acolormap_c1
 #define aliastransform                       aliastransform_c1
 #define a_skinwidth                          a_skinwidth_c1

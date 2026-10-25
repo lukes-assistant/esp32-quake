@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_main.c  -- client main loop
 
 #include "quakedef.h"
+void R_PipeSync (void);
 #include "esp_attr.h"
 
 // we need to declare some mouse variables here, because the menu system
@@ -67,6 +68,8 @@ CL_ClearState
 void CL_ClearState (void)
 {
 	int			i;
+
+	R_PipeSync ();	// core 1 may still be drawing the last frame (r_pipe.c)
 
 	if (!sv.active)
 		Host_ClearMemory ();

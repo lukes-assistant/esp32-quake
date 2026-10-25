@@ -21,6 +21,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "d_local.h"
+#include "r_local.h"
+#include "r_pipe.h"
 
 #include "quakegeneric.h"
 
@@ -29,39 +31,49 @@ viddef_t	vid;				// global video state
 #define	BASEWIDTH	QUAKEGENERIC_RES_X
 #define	BASEHEIGHT	QUAKEGENERIC_RES_Y
 
-static byte	*vid_buffer[2];
-static short	*zbuffer;
+// three frame buffers and two z-buffers: core 1 finishes one frame while core 0 renders the
+// next and the display shows the one before (r_pipe.c)
+static byte	*vid_buffer[3];
+static short	*zbuffers[2];
+static int	curbuf, curz;
 static byte	*surfcache;
 static size_t	surfcache_size;
 
 void	VID_SetPalette (unsigned char *palette)
 {
+	if (r_pipe_recording)
+	{
+		R_PipeSetPalette (palette);	// applied with this frame (r_pipe.c)
+		return;
+	}
+	R_PipeSync ();
 	// quake generic
 	QG_SetPalette(palette);
 }
 
 void	VID_ShiftPalette (unsigned char *palette)
 {
-	// quake generic
-	QG_SetPalette(palette);
+	VID_SetPalette (palette);
 }
 
 void	VID_Init (unsigned char *palette)
 {
-	zbuffer = calloc(BASEWIDTH*BASEHEIGHT, sizeof(short));
+	zbuffers[0] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(short));
+	zbuffers[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(short));
 	vid_buffer[0] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
 	vid_buffer[1] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
+	vid_buffer[2] = calloc(BASEWIDTH*BASEHEIGHT, sizeof(byte));
 	vid.maxwarpwidth = vid.width = vid.conwidth = BASEWIDTH;
 	vid.maxwarpheight = vid.height = vid.conheight = BASEHEIGHT;
 	// pixel aspect for the shape the image is displayed at (1.0 = square pixels)
 	vid.aspect = ((float)BASEHEIGHT / (float)BASEWIDTH) * QUAKEGENERIC_DISPLAY_ASPECT;
-	vid.numpages = 2;
+	vid.numpages = 3;
 	vid.colormap = host_colormap;
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
 	vid.buffer = vid.conbuffer = vid_buffer[0];
 	vid.rowbytes = vid.conrowbytes = BASEWIDTH;
 	
-	d_pzbuffer = zbuffer;
+	d_pzbuffer = zbuffers[0];
 
 	// 3x the usual size: span drawing is deferred to after all surfaces of a flush are
 	// cached (d_jobs.c), so a block must survive until the end of the flush
@@ -75,23 +87,24 @@ void	VID_Init (unsigned char *palette)
 
 void	VID_Shutdown (void)
 {
-	free(zbuffer);
+	R_PipeSync ();
+	free(zbuffers[0]);
+	free(zbuffers[1]);
 	free(vid_buffer[0]);
 	free(vid_buffer[1]);
+	free(vid_buffer[2]);
 	free(surfcache);
 }
 
 void	VID_Update (vrect_t *rects)
 {
-	// quake generic
-	QG_DrawFrame(vid.buffer);
-	//swap buffers
-	if (vid.buffer == vid_buffer[0]) {
-		vid.buffer = vid_buffer[1];
-	} else {
-		vid.buffer = vid_buffer[0];
-	}
-	vid.conbuffer=vid.buffer;
+	// recorded frames are finished and presented by core 1
+	if (!R_PipePresent (vid.buffer))
+		QG_DrawFrame(vid.buffer);	// quake generic
+	curbuf = (curbuf + 1) % 3;
+	vid.buffer = vid.conbuffer = vid_buffer[curbuf];
+	curz ^= 1;
+	D_SetZBuffer (zbuffers[curz]);
 }
 
 /*
