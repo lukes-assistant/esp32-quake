@@ -18,53 +18,102 @@ time goes over a frame - 6. What this means for 60 fps - 7. How the numbers were
 |---|---|---|---|
 | HP CPU | 2 cores, 360 MHz | RISC-V RV32IMAFC + Xesppie (PIE 128-bit SIMD) | 400 MHz only on chip rev >= 3. In-order; measured best-case IPC ~0.93 on a tight loop |
 | L1 I-cache | 16 KB **per core** | 4-way, 64-byte lines | (ROM API has separate CORE0/CORE1 ICache controls) |
-| L1 D-cache | 64 KB, **one, shared by both cores** | 2-way, 64-byte lines, write-back | caches **both PSRAM and internal SRAM**; write-allocate |
-| TCM ("HP SPM") | 8 KB | tightly coupled to the HP CPU | not a cache |
-| HP L2MEM (internal SRAM) | 768 KB | | 256 KB of it is configured as the L2 cache (options: 128/256/512 KB); the rest is the app's internal RAM (~445 KB usable as DIRAM after ROM/reserved areas) |
-| L2 cache | 256 KB (configured) | 8-way, 128-byte lines | only in front of external memory (PSRAM / flash) |
-| LP SRAM | 32 KB | on the low-power bus | slow for the HP cores (see the LP RAM stack incident in PERF_LOG.md) |
-| PSRAM | 32 MB | AP Memory 256 Mbit, generation 4, **x16 ("hex")**, 200 MHz DDR, fixed latency | peak **800 MB/s** (16 bit x 2 x 200 MHz); code and rodata also execute from PSRAM (XIP) |
+| L1 D-cache | 32 KB (configured; up to 64 KB), **one, shared by both cores** | 4-way, 64-byte lines, write-back | caches **both PSRAM (`0x4800_0000`) and internal SRAM (`0x4FF0_0000`)**; write-allocate |
+| TCM ("HP SPM") | 8 KB (`0x3010_0000`) | tightly coupled to the HP CPU | uncached (`Cache_Address_Through_Cache == 0`); supports PIE 128-bit loads/stores |
+| HP L2MEM (internal SRAM) | 768 KB (`0x4FF0_0000` cached, `0x8FF0_0000` uncached alias) | | 256 KB configured as L2 cache (options: 128/256/512 KB); ~445 KB usable as DIRAM. Uncached alias (`0x8FFx_xxxx`) bypasses L1D and does **not** support PIE 128-bit loads/stores |
+| L2 cache | 256 KB (configured) | 8-way, 128-byte lines | only in front of external memory (PSRAM / flash); write-back, write-allocate |
+| LP SRAM | 32 KB (`0x5010_8000`) | on the low-power APB/AHB bridge | 175 cycles/load (8 MB/s) from HP cores; faults (`MCAUSE=5`) on PIE 128-bit loads/stores |
+| PSRAM | 32 MB (`0x4800_0000`) | AP Memory 256 Mbit, generation 4, **x16 ("hex")**, 200 MHz DDR, fixed 14-cycle read latency | raw data rate **800 MB/s** (16 bit x 2 x 200 MHz); code and rodata also execute from PSRAM (XIP) |
 | Flash | 16 MB | QIO, 40 MHz | only used at boot (code is copied to PSRAM) |
 
-Your estimates vs. reality: the L1 data cache is 64 KB (shared), not 16 KB per core (that is
-the instruction cache); TCM is *not* 1-cycle (it's slower than an L1 hit, below); internal
-SRAM is accessed through the same L1 D-cache, ~12 cycles on an L1 miss; PSRAM is x16 at
-200 MHz DDR (800 MB/s peak), but its effective latency on a miss is ~0.5 us, much higher than
-the device's raw access time, because the miss goes through L1 + L2 + the MSPI controller and
-fills a 128-byte line.
+### Measured (`main/membench.c`, `CONFIG_QUAKE_MEMBENCH=y`, core 0, 360.0 MHz)
 
-### Measured (main/membench.c, `CONFIG_QUAKE_MEMBENCH=y`, core 0, 360 MHz)
-Latency = random pointer chase through 128-byte-spaced nodes (dependent loads). Bandwidth =
-unrolled 32-bit loads / stores over the buffer (writes include the final write-back),
-memcpy = newlib memcpy within the region. "Idle" = before the display starts; "HDMI" = with
-the 640x480@60 RGB888 scan-out running (55 MB/s of PSRAM reads by the display DMA).
+#### A. Memory & cache hierarchy (CPU latency & bandwidth)
+Latency = pointer chase through 128-byte-spaced nodes (random order, sequential order, and 4 independent random chains walked in lockstep).
+Bandwidth = `rd32` / `wr32` (unrolled 32-bit scalar loads/stores), `rd128` / `wr128` (unrolled 128-bit PIE `esp.vld.128.ip` / `esp.vst.128.ip` vector loads/stores; writes include final `esp_cache_msync` write-back on cached regions), `line touch` (one 32-bit load per 64-byte L1 line), and `memcpy`.
+Numbers in parentheses `(HDMI)` are measured with the 640x480@60 RGB888 MIPI-DSI/HDMI scan-out running (~55 MB/s PSRAM read traffic).
 
-| Region | Latency idle | Latency HDMI | Read MB/s | Write MB/s | memcpy MB/s |
+| Region | Random chase (cyc) | Seq chase (cyc) | 4-chain (cyc/load) | Read 32b (MB/s) | Read 128b PIE (MB/s) | Line touch (MB/s) | Write 32b (MB/s) | Write 128b PIE (MB/s) | memcpy (MB/s) |
+|---|---|---|---|---|---|---|---|---|---|
+| **TCM (`0x3010_0000`, 4 KB, uncached)** | 4.0 (4.0) | 4.0 | 3.0 | 396 | **1,874** (1,798) | 4,975 | 477 | **1,867** | 236 |
+| **LP SRAM (`0x5010_8000`, 4 KB, uncached)** | **175.0** (175.4) | 175.0 | 175.0 | **8** | *faults* | 126 | **8** | *faults* | 4 |
+| **SRAM in L1 (`0x4FFx`, 16 KB)** | **3.0** (3.0) | 3.0 | **1.5** | 639 | **5,076** (5,034) | **9,090** | 814 | 1,656 (1,732) | 441 |
+| **SRAM at L1 edge (`0x4FFx`, 32 KB)** | **3.0** (3.0) | 3.0 | **1.5** | 640 | **5,098** (5,098) | **9,152** | 856 | **1,934** | 466 |
+| **SRAM beyond L1 (`0x4FFx`, 96 KB, L2MEM hits)** | **12.1** (12.0) | 10.0 | 12.0 | 479 | **1,771** (1,771) | 2,093 | 640 | **1,258** | 349 |
+| **SRAM uncached alias (`0x8FFx`, 16 KB)** | 12.0 (12.0) | 12.0 | 12.0 | 115 | *faults* | 1,768 | 120 | *faults* | 60 |
+| **PSRAM in L1 (`0x48xx`, 16 KB)** | **3.0** (3.0) | 3.0 | **1.5** | 639 | **5,037** (5,036) | 8,962 | 292 | 361 (324) | 223 (211) |
+| **PSRAM at L1 edge (`0x48xx`, 32 KB)** | **3.0** (3.0) | 3.0 | **1.5** | 634 | **5,098** (5,098) | **9,152** | 298 (269) | 370 (325) | 231 (212) |
+| **PSRAM in L2 (`0x48xx`, 192 KB, L2 hits)** | **12.0** (12.0) | 10.0 | 12.1 | 480 | **1,765** (1,771) | 2,094 | 281 (257) | 353 (317) | 207 (192) |
+| **PSRAM cold (`0x48xx`, 4 MB, L2 misses)** | **177.4** (204.7) | 156.1 (180.8) | 177.6 (204.4) | 187 (166) | **218** (193) | **237** (206) | 199 (169) | **200** (171) | 95 (83) |
+
+Key takeaways from the memory & cache table:
+- **L1 D-cache hits (`3.0 cycles` = 8.3 ns, `1.5 cycles/load` with 4 chains) deliver `5.1 GB/s` with 128-bit PIE loads and `9.15 GB/s` line-touch rate**, regardless of whether the backing store is internal SRAM or PSRAM. Scalar 32-bit load loops (`640 MB/s`) are purely CPU instruction-issue bound.
+- **L1 misses that hit in internal SRAM (`L2MEM`) or L2 cache cost `12.0 cycles` (33 ns) random / `10.0 cycles` sequential, delivering `1.77 GB/s` with 128-bit PIE loads.**
+- **TCM (`0x3010_0000`) is uncached zero-wait-state RAM (`4.0 cycles` load latency, `1.87 GB/s` 128-bit PIE read and `1.87 GB/s` 128-bit PIE write).** (The earlier 12 MB/s write figure was an artifact of calling `esp_cache_msync` on an uncached TCM address; guarding with `Cache_Address_Through_Cache()` fixed it.)
+- **PIE 128-bit vector loads/stores (`esp.vld.128.ip` / `esp.vst.128.ip`) are only wired to the HP CPU's L1D port and TCM port.** Executing a 128-bit PIE load/store against LP SRAM (`0x5010_8000`) or the uncached L2MEM alias (`0x8FF0_0000`) triggers a hardware `Load/Store access fault` (`MCAUSE = 5/7`).
+- **LP SRAM (`0x5010_8000`) costs `175 cycles` per 32-bit load (`8 MB/s`)** across the LP bridge — as slow as a cold PSRAM miss, without any cache in front of it. Never place stacks or hot data in LP SRAM.
+- **Cold PSRAM misses cost `177.4 cycles` (493 ns) random / `156.1 cycles` sequential (`204.7` / `180.8 cycles` with HDMI scan-out active), and `chase4` (4 independent random chains) also costs `177.6 cycles/load`.** The CPU + L2 cache subsystem serializes external PSRAM line fills (1 outstanding miss at a time), capping a single non-prefetched CPU stream at **218 MB/s (`rd128`) / 237 MB/s (`touch`)**.
+
+#### B. PSRAM write-allocate penalty vs L2-warm writes (with hardware L2 counters)
+Tested on a `128 KB` PSRAM buffer (`1,024` L2 lines of 128 B) using the hardware L2 cache access counters (`CACHE_L2_DBUS0_ACS_HIT_CNT_REG`, `MISS_CNT_REG`, `NXTLVL_RD_CNT_REG`):
+
+| Write mode (`128 KB`, `wr128`) | Idle MB/s | HDMI MB/s | L2 hits | L2 misses | PSRAM 128 B line reads (`NXTLVL_RD`) | Traffic explanation |
+|---|---|---|---|---|---|---|
+| **Cold write + write-back** (`evict` then `wr128` + `msync`) | **148** | **140** | 6,158 | 93,164 | **1,024** (= 128 KB read!) | **2x PSRAM traffic**: every store to a cold line stalls to read 128 B from PSRAM (Read-For-Ownership) before writing 128 B back |
+| **L2-warm write + write-back** (already in L2, `wr128` + `msync`) | **350** | **318** | 6,158 | **0** | **0** | **1x PSRAM traffic**: 0 PSRAM reads; only the 128 KB write-back to PSRAM occurs |
+| **L2-warm write (no write-back)** (stays dirty in L2) | **1,536** | **1,536** | 6,144 | **0** | **0** | **0x PSRAM traffic**: pure L1/L2 cache store speed |
+
+- Writing from the CPU directly to a cold PSRAM buffer (like the 300 KB 8-bit framebuffer or 600 KB Z-buffer) pays a **2.36x bandwidth penalty (`148 MB/s` vs `350 MB/s`)** because the L2 cache is write-allocate with no full-line write-combining bypass. Rendering into an L1/L2-resident SRAM band buffer and DMA-copying it out avoids all Read-For-Ownership traffic.
+
+#### C. Hardware prefetch (`autoload`), software prefetch, cache wrap-around, and manual preload
+Tested over a cold `4 MB` PSRAM buffer:
+
+| Mechanism & exact configuration | Touch MB/s | `rd32` MB/s | `rd128` MB/s (HDMI) | Seq chase (cyc) | Notes / hardware register behavior |
 |---|---|---|---|---|---|
-| TCM 4 KB | 4.0 cyc = 11 ns | 4.0 cyc | 394 | 180 | 236 |
-| Internal SRAM 16 KB (L1 hits) | 3.0 cyc = 8.3 ns | 3.5 cyc | 632 | 1116 | 582 |
-| Internal SRAM 96 KB (> L1) | 11.9 cyc = 33 ns | 14.2 cyc | 482 (412) | 709 (395) | 373 (199) |
-| PSRAM 32 KB (L1 hits) | 3.0 cyc = 8.3 ns | 5.8 cyc | 632 (356) | 975 (479) | 587 (344) |
-| PSRAM 192 KB (L2 hits) | 12.1 cyc = 34 ns | 11.9 cyc | 476 (352) | 655 (438) | 374 (257) |
-| PSRAM 4 MB (misses) | **177 cyc = 492 ns** | **207 cyc = 576 ns** | 190 (167) | 202 (171) | 98 (84) |
-| GDMA (AXI) SRAM -> PSRAM, 10 KB transfers | | | | 138 (both) | |
+| **Autoload OFF** (`L1=off, L2=off`) | 237 | 187 | **218** (193) | 156.1 (180.7) | Default at boot (`0x00000002`); 32,768 L2 line reads for 4 MB |
+| **L1D Autoload only** (`L1=on, L2=off, trig=miss+hit`) | 284 | 227 | **233** (203) | 156.1 (180.9) | Prefetches 64 B L1 lines; helps `touch`/`rd32` but limited by L2 miss latency on `rd128` |
+| **L2 Autoload (`trig=miss`, `order=asc`)** | 278 | 278 | **278** (240) | **142.8** (165.1) | Prefetches next 128 B L2 line on L2 miss (+27.5% `rd128`) |
+| **L2 Autoload (`trig=hit`, `order=asc`)** | **284** | **284** | **284** (246) | 156.1 (180.7) | Prefetches next 128 B L2 line on L2 hit (+30.3% `rd128`) |
+| **L2 Autoload (`trig=miss+hit`, `order=asc`)** | **284** | **284** | **284** (246) | **142.8** (165.1) | **Best streaming setting**: +30.3% `rd128` (+48.7% `rd32`) and lowest sequential latency |
+| **L1D + L2 Autoload (`L1=on, L2=on, trig=miss+hit`)** | **284** | **284** | **284** (246) | 145.9 (170.0) | Identical bandwidth to L2-only autoload; L2 autoload alone is sufficient |
+| **L2 Autoload on descending scan (`order=desc` vs `asc`)** | - | - | **284** vs 213 | - | `order=1` (`desc`) gives the full +33% boost on backward scans; `order=0` (`asc`) gives 0% on backward scans |
+| **L2 Autoload step (`CACHE_AUTOLOAD_STEP` bits `[6:5]`)** | - | - | - | - | **Hardwired to `0` (1 line) on ESP32-P4 v1.0**: writing `2<<5` to `CACHE_L2_CACHE_AUTOLOAD_CTRL_REG` reads back `0` |
+| **SW `__builtin_prefetch(p + 128..512, 0, 3)`** | - | - | **217** (off) / **284** (on) | - | **0% effect**: GCC RISC-V target without `Zicbop` emits no hardware prefetch instruction |
+| **Cache wrap-around (`CACHE_L1_DCACHE_WRAP` / `L2_CACHE_WRAP`)** | - | - | - | - | **Do NOT enable** unless MSPI Flash & PSRAM MR8 are reconfigured to matching wrap lengths; setting `CACHE_L2_CACHE_WRAP` while PSRAM `BurstLen=2048B` rotates L2 line words and corrupts XIP code |
+| **Manual L2 Preload (`Cache_Start_L2_Cache_Preload`, 128 KB in 32 KB chunks)** | - | - | **357** (299) preload -> **1,756** read | - | Size reg `CACHE_L2_CACHE_PRELOAD_SIZE_REG` is **16-bit (`<= 32 KB` per call)**; `exc=0x0`, 4,096 L2 hits / 0 misses on subsequent read |
+| **Manual L1D Preload (`Cache_Start_L1_DCache_Preload`, 16 KB in 8 KB chunks)** | - | - | **341** (cold) / **7,475** (L2-warm) -> **5,063** read | - | Size reg `CACHE_L1_DCACHE_PRELOAD_SIZE_REG` is **14-bit (`<= 8 KB` per call)**; `exc=0x0` |
+| **Overlapped async L2 Preload (blk $i+1$) + CPU `2x rd128` (blk $i$)** | - | - | **285** (242) vs **208** (180) no-preload | - | **+37% effective throughput** when ping-pong preloading 16 KB blocks ahead of CPU compute |
 
-(Numbers in brackets: with HDMI scan-out running.) Reading the table:
-- **An L1 hit costs 3 cycles whatever the memory behind it.** An L1 miss costs ~12 cycles if
-  the line is in internal SRAM or in the L2; **~180-210 cycles if it has to come from PSRAM**
-  -- 15x more. Everything about performance on this chip is about the L1/L2 hit rate for
-  PSRAM data.
-- The read/write figures for L1 hits are loop-bound (one 32-bit access per cycle at best =
-  1.44 GB/s); 128-bit PIE loads could go higher, but no hot loop here is load-bandwidth bound.
-- **TCM is slower than an L1 hit** (4 cycles, writes 180 MB/s); it isn't a speed tier for
-  the CPU (code in TCM ran 21% slower, PERF_LOG.md). Useful for small data that must not
-  evict the L1, or for DMA-coherent scratch.
-- A single core streaming from PSRAM gets ~190 MB/s: with ~1 outstanding miss, 128 B per
-  ~0.5 us is ~260 MB/s theoretical. memcpy PSRAM->PSRAM manages only ~90 MB/s (read misses
-  plus write-allocate line fills plus write-backs).
-- HDMI scan-out (a DMA master) costs the CPU ~15-20% on PSRAM misses and halves the
-  effectiveness of the shared L1 for the test (the other core's display task and interrupts
-  use the same L1).
+#### D. Dual-core PSRAM contention vs CPU + DMA concurrency
+- **Both CPU cores streaming cold PSRAM simultaneously (`4 MB` per core)**:
+  - `line touch`: Core 0 `142 MB/s` + Core 1 `142 MB/s` = **284 MB/s total** (`247 MB/s` with HDMI active) — identical to 1 core with L2 autoload.
+  - `rd128`: Core 0 `111 MB/s` + Core 1 `111 MB/s` = **223 MB/s total** (`195 MB/s` with HDMI active).
+  - `wr128`: Core 0 `80 MB/s` + Core 1 `80 MB/s` = **160 MB/s total** (`139 MB/s` with HDMI active).
+- **CPU `rd128` (cold PSRAM) + AXI-GDMA (`SRAM -> PSRAM`) running concurrently**:
+  - CPU `160 MB/s` + AXI-GDMA `160 MB/s` = **321 MB/s combined** (`276 MB/s` with HDMI active) — unlike two CPUs sharing the L2 miss queue, AXI-GDMA accesses the MSPI AXI port independently of the L2 cache controller, increasing aggregate PSRAM utilization.
+
+#### E. All 4 DMA engines on ESP32-P4 & exact settings to approach datasheet peak (`800 MB/s`)
+ESP32-P4 has **four distinct DMA architectures**. Benchmarking all four reveals why standard `AXI-GDMA` topped out at ~172 MB/s while **DW-GDMA** and **2D-DMA (`DMA2D` / PPA)** reach **557–616 MB/s (70%–77% of the 800 MB/s PSRAM theoretical peak)** and **698–807 MB/s** in internal SRAM:
+
+| DMA Engine & Configuration | `SRAM -> PSRAM` (MB/s) | `PSRAM -> SRAM` (MB/s) | `PSRAM -> PSRAM` (MB/s) | `SRAM -> SRAM` (MB/s) | Notes & Hardware Settings |
+|---|---|---|---|---|---|
+| **1. AHB-GDMA** (`esp_async_memcpy_install_gdma_ahb`, burst 4/8/16/32 B) | 34 (29) | 12 (11) | 9 (8) | 146 (146) | 32-bit AHB bus bridge; unsuitable for PSRAM bulk transfers |
+| **2. AXI-GDMA** (`esp_async_memcpy_install_gdma_axi`, burst `16 B`) | 172 (164) | 105 (89) | 70 (59) | 163 (163) | Requires `cfg.backlog >= count` to avoid queue overflow |
+| **2. AXI-GDMA** (`esp_async_memcpy_install_gdma_axi`, burst `32 B`) | 172 (172) | 130 (112) | 101 (85) | 163 (163) | |
+| **2. AXI-GDMA** (`esp_async_memcpy_install_gdma_axi`, burst `64 B`) | **172** (172) | **171** (153) | **133** (113) | 163 (163) | Max burst size = 64 B; limited outstanding AXI requests |
+| **2. AXI-GDMA direct link** (`gdma_new_axi_channel`, 10 KB / 32 KB pre-mounted) | **154** / **169** | - | - | - | Used by `main/bandcopy.c` (10,240 B = 16-row Quake band) |
+| **3. DW-GDMA** (`dw_gdma_new_channel`, 64-bit, `out_req = 1`, `burst_items = 64`, `len = 16`) | 435 (374) | 223 (209) | 205 (171) | 420 (399) | Synopsys DesignWare AXI DMAC; `DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS` (no descriptor list in RAM!) |
+| **3. DW-GDMA** (`dw_gdma_new_channel`, 64-bit, `out_req = 4..16`, `burst_items = 64`, `len = 16`) | **557** (484–544) | **337** (284–326) | **228** (195–200) *(456 MB/s rd+wr!)* | **698** (668–680) | **3.24x faster than AXI-GDMA (`SRAM->PSRAM`)**; `num_outstanding_requests >= 4` pipelines 128 B AXI bursts into MSPI |
+| **3. DW-GDMA fixed-src fill (`memset`)** (`src = FIXED`, `dst = INCREMENT`, `out_req = 16`) | **616** (540) | - | - | **807** (778) | **77% of theoretical 800 MB/s PSRAM peak!** Zero CPU cycles |
+| **4. 2D-DMA + PPA Fill** (`ppa_do_fill`, `ARGB8888`, burst `16 B` / `64 B` / `128 B`) | **325** / **535** / **602** (529) | - | - | - | `PPA_DATA_BURST_LENGTH_128` hits **602 MB/s** writing 1.2 MB to PSRAM |
+| **4. 2D-DMA + PPA Fill** (`ppa_do_fill`, burst `128 B`, `RGB888` 3B / `RGB565` 2B) | **523** (477) / **348** (348) | - | - | **239** (`RGB565`) | |
+| **4. 2D-DMA + PPA SRM** (`ppa_do_scale_rotate_mirror` 1:1, burst `128 B`, `ARGB8888` / `RGB888` / `RGB565`) | - | - | **94** / **77** / **62** out (**187** / **154** / **123** rd+wr) | - | `RGB565 -> RGB888` conversion: `85 MB/s` out (`142 MB/s` rd+wr) |
+| **4. 2D-DMA + PPA Blend** (`ppa_do_blend`, burst `128 B`, `L8+A4 -> RGB888` 640x480) | - | - | **176** (164) out (**264** / **246** rd+wr, **5.23 ms**) | - | Used by `main/display.c` for hardware CLUT8 palette conversion |
+
+Why **DW-GDMA (`557–616 MB/s`)** and **2D-DMA PPA-Fill (`602 MB/s`)** beat the CPU (`218–284 MB/s`) and `AXI-GDMA` (`172 MB/s`) by **2x–3.5x**:
+1. **Pipelined Outstanding AXI Requests (`num_outstanding_requests = 4..16`)**: The CPU's L2 cache issues 1 PSRAM line request at a time and waits the full ~60-cycle MSPI command + 14-cycle read latency before issuing the next request. `DW-GDMA` keeps 4 to 16 128-byte AXI burst transactions (`width = DW_GDMA_TRANS_WIDTH_64`, `burst_len = 16`, `burst_items = 64`) in flight simultaneously, saturating the MSPI controller's queue. (Note: `DW-GDMA`'s AXI data bus on ESP32-P4 is 64 bits wide; setting `DW_GDMA_TRANS_WIDTH_128` clamps to 64 bits in hardware.)
+2. **128-Byte Bursts (`PPA_DATA_BURST_LENGTH_128` / `DW-GDMA` 64b x 16)**: `AXI-GDMA` is capped at 64-byte bursts (`max_data_burst_size = 64`), whereas `2D-DMA` and `DW-GDMA` issue full 128-byte bursts matching the L2/MSPI burst granularity.
+3. **Zero Descriptor Overhead in `DW-GDMA` Contiguous Mode**: Unlike `AXI-GDMA` (which requires a linked list of 4 KB descriptors in RAM), `DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS` transfers up to `4M` 64-bit items (`32 MB`) in a single hardware block register write (`block_ts` is 22 bits). One of the 4 `DW-GDMA` channels is used by the MIPI-DSI DPI bridge, leaving **3 free `DW-GDMA` channels** for the application.
 
 ---
 
