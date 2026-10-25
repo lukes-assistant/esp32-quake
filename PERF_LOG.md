@@ -436,3 +436,35 @@ User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 nativel
   in parallel in the FPU, paired texel loads (p0/p1, p2/p3, p4/p5, p6/p7) to hide load-use
   latency, and skipped fdiv.s/snext/tnext when the remaining tail is 1 pixel.
 - **34.52 fps (+6.3% vs 32.46)** (346 frames / 10.02 s). Kept.
+## 2026-10-25 — (continued after a session break; state at HEAD 81ceb7f re-measured 34.54 fps)
+
+### Profile at 34.3 fps (both cores)
+- Core 0: D_DrawSpans8Job 24.4%, R_DrawSurfaceBlock8_mip0 10.5% (+mip1 1.4%), D_PolysetDrawSpans8
+  9.0%, R_GenerateSpans 3.5%, D_DrawZSpansJob 3.3%, R_LeadingEdge 2.8%, D_PolysetScanLeftEdge
+  2.7%, R_RecursiveWorldNode 2.4%, idle 2.1%, CL_RelinkEntities 2.0%, Draw_ConsoleBackground
+  1.7%, S_PaintChannels 1.6%.
+- Core 1: idle 45.5%, D_DrawSpans8Job 31.9%, R_DrawSurfaceBlock8_mip0_c1 12.6%, z 3.7%.
+
+### Experiment: 4 span buffers (in PSRAM) instead of 2 (in SRAM)
+- So core 0 can scan further ahead of the job queue. **34.08 fps (no gain)**; buffer-switch
+  waits aren't the limiter. Reverted.
+
+### Experiment: core 0 only helps with jobs inside the range it waits for (D_JobsWaitRange)
+- Idea: when switching span buffers core 0 was claiming fresh jobs, stealing work core 1
+  would do. **34.35 fps (no gain)**. Reverted.
+
+### Checked against an AI-written list of ideas supplied by the user
+- "Aliasing reloads in R_DrawSurfaceBlock8 (restrict locals + 32-bit stores)": already
+  tried, +0.1% (noise), reverted (see above). Same idea for D_PolysetDrawSpans8 not yet tried.
+- "Branch bloat / fdiv.s stalls in D_DrawSpans8Job": already done (commit 81ceb7f, +6.3%).
+- "Offload Turbulent8 / D_DrawSkyScans8 / D_DrawSolidSurface to jobs": none of them is in
+  either core's top 25 (<0.7% each). Little to gain.
+- "Parallel alias rasterisation": agreed, ~15% of core 0, the largest serial chunk left.
+
+### Experiment: hottest loops in the 8 KB TCM (SPM_IRAM_ATTR)
+- D_RunJob (span + z loops inlined, 1800 B), R_DrawSurfaceBlock8_mip0/mip1 (+_c1 copies),
+  D_PolysetDrawSpans8, R_LeadingEdge, R_GenerateSpans, R_StepActiveU: ~5.2 KB of 8 KB.
+- Ran fine on both cores, but **27.35 fps (-21% vs 34.54)**. Executing from TCM is slower
+  than from PSRAM via the L1 instruction cache (hot loops already hit the I-cache), possibly
+  also contended between the two cores. Reverted.
+
