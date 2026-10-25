@@ -398,7 +398,7 @@ void display_init() {
 	//no backlight on HDMI; the BSP's HDMI backlight pin (GPIO23) is UEXT I2C_SCL2 here
 
 	drawing_mux=xSemaphoreCreateMutex();
-	xTaskCreatePinnedToCore(draw_task, "draw", 4096, NULL, 3, &draw_task_handle, 1);
+	xTaskCreatePinnedToCore(draw_task, "draw", 4096, NULL, 8, &draw_task_handle, 1);
 }
 
 

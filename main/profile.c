@@ -165,8 +165,8 @@ static void window_end(const char *what, int frames, float seconds) {
 #endif
 	printf("BENCH %s: %d frames %.2f seconds %.2f fps\n", what, frames, seconds, frames/seconds);
 	if (disp_frames) {
-		printf("BENCH display (core 1) per frame: palette convert %.2f ms, PPA scale %.2f ms\n",
-				disp_convert_us/1000.0/disp_frames, disp_scale_us/1000.0/disp_frames);
+		printf("BENCH display (core 1) per frame: palette convert %.2f ms, PPA scale %.2f ms; %d frames converted\n",
+				disp_convert_us/1000.0/disp_frames, disp_scale_us/1000.0/disp_frames, disp_frames);
 	}
 	if (wait_frames) {
 		printf("BENCH game (core 0) waited for display: %.2f ms per frame\n",

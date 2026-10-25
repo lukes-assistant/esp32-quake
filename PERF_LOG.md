@@ -719,3 +719,37 @@ reporter printing both cores' PCs, task states and job-queue state; all removed 
 - Same pixels as the generic 16.16 stepping loop (fstep = 0.5). **44.10 fps (+0.5%)**. Kept
   (it's on core 1 now, which still has some slack).
 
+### Experiment: colormap (16 KB) copied to internal SRAM
+- **44.35 fps (+0.6%, noise level)** for 16 KB of internal RAM. Reverted.
+
+### Diagnostic: no world z-fill in the view model's box (gun z-tests against stale z)
+- **46.47 fps (+5.4% vs 44.10)**: the z-fill for the gun's box (it's large: ~240-430 x 155
+  pixels) is a big cost.
+
+### Experiment: gun drawn in front of the world (GLQuake semantics), z cleared in its box
+- The view model's box no longer goes into the z rows; before drawing it, the core that draws
+  it zeroes the z-buffer in the box except where the world's z was filled for other models,
+  sprites or particles, so the gun only depth-tests against itself. Picture correct.
+- **44.59 fps (+1.1%)**: zeroing the box costs nearly as much as the world z-fill did. Both
+  are dominated by PSRAM write traffic (write-allocate line fills), not by computation.
+  Too small for a change of behaviour. Reverted.
+- Takeaway: PSRAM writes cost ~1 ms per ~130 KB here. The big writers per frame: 8-bit
+  frame buffer (300 KB), world z-fill (zrows regions), surface-cache builds (~87 KB).
+
+### Experiment: asynchronous L2 preload of the frame-buffer rows ahead of the edge scan
+- Cache_Start_L2_Cache_Preload for the next 8 (or 32) rows of the frame buffer as R_ScanEdges
+  reaches them, so span writes would hit L2 instead of filling lines from PSRAM.
+- **43.58 fps (8 rows), 43.08 fps (32 rows) vs 44.10: slower.** The preloads compete with the
+  other PSRAM traffic (and perhaps evict useful lines). Reverted.
+
+### Found: the display task was starved by the job worker on core 1
+- BENCH now also prints how many frames the display task converted (all of them: 443 for
+  442 rendered, so none were dropped).
+- The draw task (PPA palette conversion) ran at priority 3 on core 1, below the job worker
+  (6), which is now busy most of the time: the "palette convert 17.96 ms" included waiting
+  to be scheduled. Draw task priority 8 (it mostly waits for the PPA):
+  **45.23 fps (+2.6% vs 44.09), conversion 6.53 ms per frame**, lower display latency.
+- The USB HID task and the CD music task (priority 4, core 1) were starved the same way
+  (input latency, possible music dropouts). Both block on events/ring buffers; raised to 7.
+  45.25 fps.
+
