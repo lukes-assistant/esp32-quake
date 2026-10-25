@@ -32,7 +32,8 @@ with the gradients passed in instead of read from globals.
 extern drawsurf_t	r_drawsurf_c1;
 void R_DrawSurface_c1 (void);
 
-#define MAX_JOBS		2048
+#define MAX_JOBS		1024
+#define MAX_BUILDS		256
 #define JOBS_CORE		1
 #define JOBS_PRIORITY	6	// above the display conversion task, below audio
 
@@ -40,22 +41,24 @@ typedef struct
 {
 	espan_t		*spans;
 	float		ziorigin, zistepu, zistepv;
-	qboolean	color;		// draw textured spans (else z only)
-	qboolean	needbuild;	// build the surface-cache block first, using ds
 	pixel_t		*cacheblock;
 	pixel_t		*viewbuffer;	// d_viewbuffer when queued (a band buffer, r_edge.c)
-	int			waitjob;		// >= 0: the job building the surface-cache block, wait for it
-	int			cachewidth;
 	float		sdivzorigin, sdivzstepu, sdivzstepv;
 	float		tdivzorigin, tdivzstepu, tdivzstepv;
 	fixed16_t	sadjust, tadjust, bbextents, bbextentt;
-	drawsurf_t	ds;
+	int16_t		cachewidth;
+	int16_t		waitjob;		// >= 0: the job building the surface-cache block, wait for it
+	int16_t		build_idx;		// >= 0: index into build_ds[] (build surface-cache block first)
+	uint8_t		color;			// draw textured spans (else z only)
+	uint8_t		pad;
 } job_t;
 
-static EXT_RAM_BSS_ATTR job_t	jobs[MAX_JOBS];
+static job_t					jobs[MAX_JOBS];
+static drawsurf_t				build_ds[MAX_BUILDS];
 static uint32_t					jobdone[MAX_JOBS];	// = frame generation when finished
 
 static int		numjobs;		// published; written by core 0 only
+static int		numbuilds;		// written by core 0 only
 static int		nextjob;		// claimed by either core
 static int		jobs_closed;	// core 0 has published the frame's last job
 static uint32_t	frame_gen;		// incremented per frame by core 0
@@ -313,16 +316,16 @@ static void D_DrawSpans8Job (const job_t *job)
 
 static void D_RunJob (job_t *job, int core)
 {
-	if (job->needbuild)
+	if (job->build_idx >= 0)
 	{
 		if (core)
 		{
-			r_drawsurf_c1 = job->ds;
+			r_drawsurf_c1 = build_ds[job->build_idx];
 			R_DrawSurface_c1 ();
 		}
 		else
 		{
-			r_drawsurf = job->ds;
+			r_drawsurf = build_ds[job->build_idx];
 			R_DrawSurface ();
 		}
 	}
@@ -447,6 +450,7 @@ void D_JobsBeginFrame (void)
 	}
 	frame_task = xTaskGetCurrentTaskHandle ();
 	numjobs = 0;
+	numbuilds = 0;
 	nextjob = 0;
 	jobs_closed = 0;
 	jobs_active = true;
@@ -472,21 +476,20 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 {
 	job_t	*job;
 
-	if (!jobs_active || numjobs >= MAX_JOBS)
+	if (!jobs_active || numjobs >= MAX_JOBS || (needbuild && numbuilds >= MAX_BUILDS))
 		return false;
 	job = &jobs[numjobs];
 	job->spans = spans;
 	job->ziorigin = ziorigin;
 	job->zistepu = zistepu;
 	job->zistepv = zistepv;
-	job->color = color;
-	job->needbuild = needbuild;
-	job->waitjob = waitjob;
+	job->color = color ? 1 : 0;
+	job->waitjob = (int16_t)waitjob;
 	if (color)
 	{
 		job->cacheblock = cacheblock;
 		job->viewbuffer = d_viewbuffer;
-		job->cachewidth = cachewidth;
+		job->cachewidth = (int16_t)cachewidth;
 		job->sdivzorigin = d_sdivzorigin;
 		job->sdivzstepu = d_sdivzstepu;
 		job->sdivzstepv = d_sdivzstepv;
@@ -499,7 +502,14 @@ qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
 		job->bbextentt = bbextentt;
 	}
 	if (needbuild)
-		job->ds = *ds;
+	{
+		job->build_idx = (int16_t)numbuilds;
+		build_ds[numbuilds++] = *ds;
+	}
+	else
+	{
+		job->build_idx = -1;
+	}
 	__atomic_store_n (&numjobs, numjobs + 1, __ATOMIC_SEQ_CST);	// publish
 	return true;
 }

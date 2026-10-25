@@ -1014,4 +1014,32 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
     `Sys_FileRead` (`sys_null.c`) so SDMMC DMA never races with L2 prefetch: **51.16 fps (+2.4%
     vs 49.98 baseline)** (512 frames / 10.01 s). Kept.
 
+### Experiment: Candidate 4 — Compact `job_t` (116 -> 68 B), `jobs[]` in internal SRAM, `MAXHEIGHT=480` / `MAXWIDTH=640`
+- Split `drawsurf_t ds` (48 B, only needed by the ~16 surface-build jobs per frame) out of
+  `job_t` into `build_ds[256]`, shrinking `job_t` from 116 to 68 B, and moved `jobs[1024]` from
+  PSRAM (`EXT_RAM_BSS_ATTR`) into internal SRAM (`d_jobs.c`).
+- Reduced `MAXHEIGHT` (`1024 -> 480`) and `MAXWIDTH` (`1280 -> 640`) in `r_shared.h` and
+  `d_ifacea.h` to shrink per-scanline tables (`newedges`, `removeedges`, `d_zrowmin`, `d_zrowmax`,
+  `sintable`, `intsintable`).
+- **51.75 fps (+1.2% vs 51.16, +3.5% vs 49.98 baseline)** (518 frames / 10.01 s). Kept.
+
+### Experiment: Candidate 5 — 8 KB TCM (`SPM_DRAM_ATTR`) for `d_zrowmin/max` + `newedges/removeedges` and 2-pixel paired Z-test in `D_PolysetDrawSpans8`
+- Placed `d_zrowmin`/`d_zrowmax` and `newedges`/`removeedges` in the 8 KB TCM (`SPM_DRAM_ATTR`),
+  moved Core 1's alias `spans[]` to internal SRAM, and unrolled `D_PolysetDrawSpans8` 2x with
+  paired 32-bit Z loads.
+- **51.39 fps (-0.7% vs 51.75)**: TCM bypasses the 3-cycle L1 D-cache (paying 4 cycles + dual-core
+  port contention when both cores access `d_zrowmin/max`), and short monster triangle spans pay
+  extra branch overhead on the 2-pixel alignment prologue/epilogue.
+- Tested branchless `ltfrac` carry alone in `d_polyse.c`: **51.65 fps** (noise vs 51.75; alias
+  rasterisation runs on Core 1, which is not the pacing core). Both reverted.
+
+### Experiment: Candidate 6 — Manual L2 preload (`Cache_Start_L2_Cache_Preload`) of `jobs[i+2].cacheblock` in `D_RunJobs`
+- Issued non-blocking `Cache_Start_L2_Cache_Preload` (`<= 32 KB`) for `jobs[i+2].cacheblock`
+  (`cachewidth * height` bytes) before running `jobs[i]`.
+- **49.36 fps (-4.6% vs 51.75)**: each band job only draws a 16-row screen band and touches a
+  small slice of `cacheblock`; preloading the entire surface block across 27 bands floods the
+  shared PSRAM bus with unused texel rows and evicts live L2 lines, whereas hardware L2 autoload
+  only prefetches the +128 B line adjacent to the active texel row. Reverted.
+
+
 
