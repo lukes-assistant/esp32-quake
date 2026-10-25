@@ -1041,5 +1041,16 @@ Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB genera
   shared PSRAM bus with unused texel rows and evicts live L2 lines, whereas hardware L2 autoload
   only prefetches the +128 B line adjacent to the active texel row. Reverted.
 
-
+### Bugfix: Static entities (torches `progs/flame.mdl`, `progs/flame2.mdl`) visible through walls
+- Root cause: `R_ComputeZRows()` (`r_zrows.c`) was called in `R_RenderView_` (`r_main.c`) before
+  `R_EdgeDrawing()`. However, static entities (`cl_static_entities`, including all torches) live in
+  BSP leaf `efrag` lists (`pleaf->efrags`) and are only appended to `cl_visedicts[]` when
+  `R_RenderWorld()` walks the visible BSP leaves and calls `R_StoreEfrags(&pleaf->efrags)` inside
+  `R_EdgeDrawing()`. Because `R_ComputeZRows()` ran before `R_RenderWorld()`, static entities were
+  never included in `d_zrowmin[]`/`d_zrowmax[]`, so the sparse world Z-buffer fill skipped the
+  screen pixels behind torches unless another dynamic entity/particle happened to overlap them.
+- Fix: Moved `R_ComputeZRows()` inside `R_EdgeDrawing()` immediately after `R_RenderWorld()` (before
+  `R_ScanEdges()`), when `cl_visedicts[]` contains both dynamic and visible static entities.
+- **51.49 fps** (515 frames / 10.00 s; -0.26 fps vs 51.75 because world Z-spans are now properly
+  written for the screen rectangles behind visible torches). Kept.
 

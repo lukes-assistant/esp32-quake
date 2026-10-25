@@ -892,6 +892,8 @@ void R_EdgeDrawing (void)
 
 	R_RenderWorld ();
 
+	R_ComputeZRows ();
+
 	if (r_drawculledpolys)
 		R_ScanEdges ();
 
@@ -1169,8 +1171,6 @@ SetVisibilityByPassages ();
 	if (!cl_entities[0].model || !cl.worldmodel)
 		Sys_Error ("R_RenderView: NULL worldmodel");
 
-	R_ComputeZRows ();
-		
 	if (!r_dspeeds.value)
 	{
 		VID_UnlockBuffer ();
