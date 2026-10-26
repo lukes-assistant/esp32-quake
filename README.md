@@ -2,6 +2,10 @@ This is a version of the Quake 1 engine that runs on the
 [Olimex ESP32-P4-PC](https://www.olimex.com/Products/IoT/ESP32-P4/ESP32-P4-PC/open-source-hardware),
 with video output over HDMI. It manages 2x the pixels at 2x the framerate than the original repo.
 
+Native 640x480 without upscaling, ~53fps
+Native 800x600 without upscaling, ~38fps
+Native 1280x720 without upscaling, ~10fps
+
 It is based on a port of [espressif/esp32-quake](https://github.com/espressif/esp32-quake), which targeted
 the ESP32-P4-Function-EV-Board with a 1024x600 MIPI LCD using 2.5x upscaling. See
 [Differences from the EV-Board version](#differences-from-the-ev-board-version) below for what
@@ -11,8 +15,6 @@ Features
 ========
 
  * Can run both the shareware as well as the registered version of Quake
-
- * Renders at 512x288 pixels, upscaled exactly 2.5x to 1280x720 HDMI, at around 18-20fps.
 
  * Audio support through the 3.5mm headphone jack. Both digital sound, as well as music if a
    .cue/.bin image of the original CDROM is provided.
@@ -27,7 +29,7 @@ Hardware required
 
  * An Olimex ESP32-P4-PC. Tested on hardware revision C with an ESP32-P4 chip revision v1.0.
 
- * An HDMI monitor or TV that accepts 1280x720 at 60Hz, and an HDMI cable.
+ * An HDMI monitor or TV that accepts 640x480, 800x600x 1280x720 at 60Hz, and an HDMI cable.
 
  * A **full-speed** USB keyboard (and optionally mouse), plugged into any of the four USB-A
    ports. Gaming keyboards and mice are usually full-speed; most basic office keyboards and
