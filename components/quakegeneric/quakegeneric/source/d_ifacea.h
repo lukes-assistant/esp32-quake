@@ -38,7 +38,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define	CYCLE	128
 
 // !!! if this is changed, it must be changed in r_shared.h too !!!
-#define	MAXHEIGHT	1024
+#include "sdkconfig.h"
+#if CONFIG_QUAKE_NATIVE_1280x720
+#define	MAXHEIGHT	720
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+#define	MAXHEIGHT	600
+#else
+#define	MAXHEIGHT	480
+#endif
 
 // !!! if this is changed, it must be changed in quakedef.h too !!!
 #define CACHE_SIZE	32		// used to align key data structures

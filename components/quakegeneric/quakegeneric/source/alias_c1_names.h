@@ -1,0 +1,118 @@
+/*
+alias_c1_names.h -- renames for the core-1 copy of the alias model code (ESP32-P4 port)
+
+r_alias_c1.c, d_polyse_c1.c and r_aclip_c1.c include this, then the original source file.
+Every global and function of r_alias.c, d_polyse.c and r_aclip.c gets a _c1 name, as does
+the shared state they write (currententity, modelorg, r_refdef, the rasteriser error terms)
+and Mod_Extradata (core 1 must not touch the model cache LRU; it gets a read-only version).
+*/
+
+#include "view_c1_names.h"
+
+#define ALIAS_C1	1	// (d_polyse.c: shared view-model z-buffer state is defined by core 0's copy)
+#define d_alias_gunz                         d_alias_gunz_c1
+
+#define acolormap                            acolormap_c1
+#define aliastransform                       aliastransform_c1
+#define a_skinwidth                          a_skinwidth_c1
+#define paliashdr                            paliashdr_c1
+#define pauxverts                            pauxverts_c1
+#define pfinalverts                          pfinalverts_c1
+#define pmdl                                 pmdl_c1
+#define ptriangles                           ptriangles_c1
+#define r_affinetridesc                      r_affinetridesc_c1
+#define R_AliasCheckBBox                     R_AliasCheckBBox_c1
+#define R_AliasDrawModel                     R_AliasDrawModel_c1
+#define R_AliasPreparePoints                 R_AliasPreparePoints_c1
+#define R_AliasPrepareUnclippedPoints        R_AliasPrepareUnclippedPoints_c1
+#define R_AliasProjectFinalVert              R_AliasProjectFinalVert_c1
+#define R_AliasSetupFrame                    R_AliasSetupFrame_c1
+#define R_AliasSetupLighting                 R_AliasSetupLighting_c1
+#define R_AliasSetupSkin                     R_AliasSetupSkin_c1
+#define R_AliasSetUpTransform                R_AliasSetUpTransform_c1
+#define R_AliasTransformAndProjectFinalVerts R_AliasTransformAndProjectFinalVerts_c1
+#define R_AliasTransformFinalVert            R_AliasTransformFinalVert_c1
+#define R_AliasTransformVector               R_AliasTransformVector_c1
+#define r_ambientlight                       r_ambientlight_c1
+#define r_amodels_drawn                      r_amodels_drawn_c1
+#define r_anumverts                          r_anumverts_c1
+#define r_apverts                            r_apverts_c1
+#define r_avertexnormals                     r_avertexnormals_c1
+#define r_plightvec                          r_plightvec_c1
+#define r_shadelight                         r_shadelight_c1
+#define R_DrawAliasItems                     R_DrawAliasItems_c1
+#define a_spans                              a_spans_c1
+#define a_sstepxfrac                         a_sstepxfrac_c1
+#define a_ststepxwhole                       a_ststepxwhole_c1
+#define a_tstepxfrac                         a_tstepxfrac_c1
+#define d_aflatcolor                         d_aflatcolor_c1
+#define d_aspancount                         d_aspancount_c1
+#define d_countextrastep                     d_countextrastep_c1
+#define D_DrawNonSubdiv                      D_DrawNonSubdiv_c1
+#define D_DrawSubdiv                         D_DrawSubdiv_c1
+#define d_light                              d_light_c1
+#define d_lightbasestep                      d_lightbasestep_c1
+#define d_lightextrastep                     d_lightextrastep_c1
+#define d_pcolormap                          d_pcolormap_c1
+#define d_pdest                              d_pdest_c1
+#define d_pdestbasestep                      d_pdestbasestep_c1
+#define d_pdestextrastep                     d_pdestextrastep_c1
+#define d_pedgespanpackage                   d_pedgespanpackage_c1
+#define D_PolysetCalcGradients               D_PolysetCalcGradients_c1
+#define D_PolysetDraw                        D_PolysetDraw_c1
+#define D_PolysetDrawFinalVerts              D_PolysetDrawFinalVerts_c1
+#define D_PolysetDrawSpans8                  D_PolysetDrawSpans8_c1
+#define D_PolysetFillSpans8                  D_PolysetFillSpans8_c1
+#define D_PolysetRecursiveTriangle           D_PolysetRecursiveTriangle_c1
+#define D_PolysetScanLeftEdge                D_PolysetScanLeftEdge_c1
+#define D_PolysetSetEdgeTable                D_PolysetSetEdgeTable_c1
+#define D_PolysetSetUpForLineScan            D_PolysetSetUpForLineScan_c1
+#define D_PolysetUpdateTables                D_PolysetUpdateTables_c1
+#define d_ptex                               d_ptex_c1
+#define d_ptexbasestep                       d_ptexbasestep_c1
+#define d_ptexextrastep                      d_ptexextrastep_c1
+#define d_pz                                 d_pz_c1
+#define d_pzbasestep                         d_pzbasestep_c1
+#define d_pzextrastep                        d_pzextrastep_c1
+#define D_RasterizeAliasPolySmooth           D_RasterizeAliasPolySmooth_c1
+#define d_sfrac                              d_sfrac_c1
+#define d_sfracbasestep                      d_sfracbasestep_c1
+#define d_sfracextrastep                     d_sfracextrastep_c1
+#define d_tfrac                              d_tfrac_c1
+#define d_tfracbasestep                      d_tfracbasestep_c1
+#define d_tfracextrastep                     d_tfracextrastep_c1
+#define d_xdenom                             d_xdenom_c1
+#define d_zi                                 d_zi_c1
+#define d_zibasestep                         d_zibasestep_c1
+#define d_ziextrastep                        d_ziextrastep_c1
+#define edgetables                           edgetables_c1
+#define pedgetable                           pedgetable_c1
+#define r_lstepx                             r_lstepx_c1
+#define r_lstepy                             r_lstepy_c1
+#define r_p0                                 r_p0_c1
+#define r_p1                                 r_p1_c1
+#define r_p2                                 r_p2_c1
+#define r_sstepx                             r_sstepx_c1
+#define r_sstepy                             r_sstepy_c1
+#define r_tstepx                             r_tstepx_c1
+#define r_tstepy                             r_tstepy_c1
+#define r_zistepx                            r_zistepx_c1
+#define r_zistepy                            r_zistepy_c1
+#define skinstart                            skinstart_c1
+#define skintable                            skintable_c1
+#define skinwidth                            skinwidth_c1
+#define R_AliasClip                          R_AliasClip_c1
+#define R_Alias_clip_bottom                  R_Alias_clip_bottom_c1
+#define R_Alias_clip_left                    R_Alias_clip_left_c1
+#define R_Alias_clip_right                   R_Alias_clip_right_c1
+#define R_Alias_clip_top                     R_Alias_clip_top_c1
+#define R_AliasClipTriangle                  R_AliasClipTriangle_c1
+#define R_Alias_clip_z                       R_Alias_clip_z_c1
+#define currententity                        currententity_c1
+#define modelorg                             modelorg_c1
+#define r_refdef                             r_refdef_c1
+#define ubasestep                            ubasestep_c1
+#define errorterm                            errorterm_c1
+#define erroradjustup                        erroradjustup_c1
+#define erroradjustdown                      erroradjustdown_c1
+#define Mod_Extradata                        Mod_Extradata_c1

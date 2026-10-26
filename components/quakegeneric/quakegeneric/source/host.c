@@ -37,10 +37,10 @@ quakeparms_t host_parms;
 
 qboolean	host_initialized;		// true if into command execution
 
-double		host_frametime;
-double		host_time;
-double		realtime;				// without any filtering or bounding
-double		oldrealtime;			// last frame run
+float		host_frametime;
+float		host_time;
+float		realtime;				// without any filtering or bounding
+float		oldrealtime;			// last frame run
 int			host_framecount;
 
 int			host_hunklevel;
@@ -404,7 +404,7 @@ void Host_ShutdownServer(qboolean crash)
 	int		count;
 	sizebuf_t	buf;
 	char		message[4];
-	double	start;
+	float	start;
 
 	if (!sv.active)
 		return;
@@ -496,12 +496,19 @@ Returns false if the time is too short to run a frame
 */
 qboolean Host_FilterTime (float time)
 {
-	realtime += time;
+	static float	unrun;		// time since the last frame that ran
 
-	if (!cls.timedemo && realtime - oldrealtime < 1.0/72.0)
+	// (ESP32-P4 port: time is single precision, the FPU has no doubles. The frame time is
+	// accumulated from the small per-tick durations rather than taken as the difference of
+	// two absolute times, which would lose precision as the uptime grows.)
+	realtime += time;
+	unrun += time;
+
+	if (!cls.timedemo && unrun < 1.0/72.0)
 		return false;		// framerate is too high
 
-	host_frametime = realtime - oldrealtime;
+	host_frametime = unrun;
+	unrun = 0;
 	oldrealtime = realtime;
 
 	if (host_framerate.value > 0)
@@ -577,9 +584,9 @@ Runs all active servers
 */
 void _Host_Frame (float time)
 {
-	static double		time1 = 0;
-	static double		time2 = 0;
-	static double		time3 = 0;
+	static float		time1 = 0;
+	static float		time2 = 0;
+	static float		time3 = 0;
 	int			pass1, pass2, pass3;
 
 	if (setjmp (host_abortserver) )
@@ -673,8 +680,8 @@ void _Host_Frame (float time)
 
 void Host_Frame (float time)
 {
-	double	time1, time2;
-	static double	timetotal;
+	float	time1, time2;
+	static float	timetotal;
 	static int		timecount;
 	int		i, c, m;
 

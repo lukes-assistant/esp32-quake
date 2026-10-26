@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "bsp/esp-bsp.h"
+#include "esp_attr.h"
 #include "esp_codec_dev_defaults.h"
 #include "esp_codec_dev.h"
 #include "driver/i2c_master.h"
@@ -32,7 +33,7 @@ int snd_inited;
 //note: keep >64 and power of 2
 #define BUFFER_SIZE		(16*1024)
 
-unsigned char dma_buffer[BUFFER_SIZE];
+EXT_RAM_BSS_ATTR unsigned char dma_buffer[BUFFER_SIZE];
 
 int dma_rpos;
 
@@ -45,13 +46,13 @@ void audio_task(void *param) {
 	int16_t *mix_buf=calloc(CHUNKSZ/2, sizeof(int16_t));
 	int old_volume=-1;
 	while(1) {
-		int mainvolume = (int)(volume.value * 100.0);
+		int mainvolume = (int)(volume.value * 100.0f);
 		if (mainvolume!=old_volume) {
 			esp_codec_dev_set_out_vol(spk_codec_dev, mainvolume);
 			old_volume=mainvolume;
-			printf("Set volume %f\n", mainvolume);
+			printf("Set volume %d\n", mainvolume);
 		}
-		int cdvol = (int)(bgmvolume.value * 255.0);
+		int cdvol = (int)(bgmvolume.value * 255.0f);
 
 		CDAudio_get_samps((char*)mix_buf, CHUNKSZ);
 		int16_t *digaudio=(int16_t*)&dma_buffer[dma_rpos];
@@ -95,7 +96,7 @@ qboolean SNDDMA_Init(void)
 	shm->buffer = (unsigned char *)dma_buffer;
 	snd_inited = 1;
 	Con_Printf("16 bit stereo sound initialized\n");
-	xTaskCreatePinnedToCore(audio_task, "audio", 4096, NULL, 7, NULL, 1);
+	xTaskCreatePinnedToCore(audio_task, "audio", 3072, NULL, 7, NULL, 1);	//peak use ~1.8 KB
 	return 1;
 }
 

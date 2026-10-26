@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // Z_zone.c
 
 #include "quakedef.h"
+void R_PipeSync (void);
 
 #define	DYNAMIC_SIZE	0xc000
 
@@ -404,6 +405,8 @@ void *Hunk_AllocName (int size, char *name)
 	Hunk_Check ();
 #endif
 
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
+
 	if (size < 0)
 		Sys_Error ("Hunk_Alloc: bad size: %i", size);
 		
@@ -443,6 +446,7 @@ int	Hunk_LowMark (void)
 
 void Hunk_FreeToLowMark (int mark)
 {
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 	if (mark < 0 || mark > hunk_low_used)
 		Sys_Error ("Hunk_FreeToLowMark: bad mark %i", mark);
 	memset (hunk_base + mark, 0, hunk_low_used - mark);
@@ -462,6 +466,7 @@ int	Hunk_HighMark (void)
 
 void Hunk_FreeToHighMark (int mark)
 {
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 	if (hunk_tempactive)
 	{
 		hunk_tempactive = false;
@@ -482,6 +487,8 @@ Hunk_HighAllocName
 void *Hunk_HighAllocName (int size, char *name)
 {
 	hunk_t	*h;
+
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 
 	if (size < 0)
 		Sys_Error ("Hunk_HighAllocName: bad size: %i", size);
@@ -528,6 +535,8 @@ Return space from the top of the hunk
 void *Hunk_TempAlloc (int size)
 {
 	void	*buf;
+
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 
 	size = (size+15)&~15;
 	
@@ -758,6 +767,7 @@ Throw everything out, so new data will be demand cached
 */
 void Cache_Flush (void)
 {
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 	while (cache_head.next != &cache_head)
 		Cache_Free ( cache_head.next->user );	// reclaim the space
 }
@@ -825,6 +835,8 @@ void Cache_Free (cache_user_t *c)
 {
 	cache_system_t	*cs;
 
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
+
 	if (!c->data)
 		Sys_Error ("Cache_Free: not allocated");
 
@@ -871,6 +883,8 @@ Cache_Alloc
 void *Cache_Alloc (cache_user_t *c, int size, char *name)
 {
 	cache_system_t	*cs;
+
+	R_PipeSync ();	// core 1 may be drawing from cache/hunk memory (r_pipe.c)
 
 	if (c->data)
 		Sys_Error ("Cache_Alloc: allready allocated");

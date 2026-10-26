@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_bsp.c
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "r_local.h"
 
 //
@@ -332,8 +333,9 @@ void R_DrawSolidClippedSubmodelPolygons (model_t *pmodel)
 	msurface_t	*psurf;
 	int			numsurfaces;
 	mplane_t	*pplane;
-	mvertex_t	bverts[MAX_BMODEL_VERTS];
-	bedge_t		bedges[MAX_BMODEL_EDGES], *pbedge;
+	static EXT_RAM_BSS_ATTR mvertex_t	bverts[MAX_BMODEL_VERTS];
+	static EXT_RAM_BSS_ATTR bedge_t		bedges[MAX_BMODEL_EDGES];
+	bedge_t		*pbedge;
 	medge_t		*pedge, *pedges;
 
 // FIXME: use bounding-box-based frustum clipping info?
@@ -452,7 +454,7 @@ void R_RecursiveWorldNode (mnode_t *node, int clipflags)
 	mplane_t	*plane;
 	msurface_t	*surf, **mark;
 	mleaf_t		*pleaf;
-	double		d, dot;
+	float		d, dot;
 
 	if (node->contents == CONTENTS_SOLID)
 		return;		// solid
@@ -649,7 +651,7 @@ void R_RenderWorld (void)
 {
 	int			i;
 	model_t		*clmodel;
-	btofpoly_t	btofpolys[MAX_BTOFPOLYS];
+	static EXT_RAM_BSS_ATTR btofpoly_t	btofpolys[MAX_BTOFPOLYS];
 
 	pbtofpolys = btofpolys;
 

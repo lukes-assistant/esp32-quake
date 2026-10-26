@@ -29,8 +29,17 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define MAXWORKINGVERTS	(MAXVERTS+4)	// max points in an intermediate
 										//  polygon (while processing)
 // !!! if this is changed, it must be changed in d_ifacea.h too !!!
-#define	MAXHEIGHT		1024
+#include "sdkconfig.h"
+#if CONFIG_QUAKE_NATIVE_1280x720
+#define	MAXHEIGHT		720
 #define	MAXWIDTH		1280
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+#define	MAXHEIGHT		600
+#define	MAXWIDTH		800
+#else
+#define	MAXHEIGHT		480
+#define	MAXWIDTH		640
+#endif
 #define MAXDIMENSION	((MAXHEIGHT > MAXWIDTH) ? MAXHEIGHT : MAXWIDTH)
 
 #define SIN_BUFFER_SIZE	(MAXDIMENSION+CYCLE)
@@ -61,11 +70,13 @@ extern	vec3_t	vpn, base_vpn;
 extern	vec3_t	vright, base_vright;
 extern	entity_t		*currententity;
 
-#define NUMSTACKEDGES		2400
+// ESP32-P4: sized to fit internal SRAM (static, see R_EdgeDrawing); demo peaks were
+// 833 edges and 346 surfaces. Larger values via r_maxedges/r_maxsurfs go to the hunk.
+#define NUMSTACKEDGES		1200
 #define	MINEDGES			NUMSTACKEDGES
-#define NUMSTACKSURFACES	800
+#define NUMSTACKSURFACES	448
 #define MINSURFACES			NUMSTACKSURFACES
-#define	MAXSPANS			3000
+#define	MAXSPANS			1200	// only sets how often R_ScanEdges flushes spans
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!
 typedef struct espan_s

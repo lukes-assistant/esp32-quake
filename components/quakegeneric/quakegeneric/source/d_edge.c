@@ -132,8 +132,13 @@ void D_CalcGradients (msurface_t *pface)
 
 	mipscale = 1.0 / (float)(1 << miplevel);
 
-	TransformVector (pface->texinfo->vecs[0], p_saxis);
-	TransformVector (pface->texinfo->vecs[1], p_taxis);
+	p_saxis[0] = DotProduct (pface->texinfo->vecs[0], vright);
+	p_saxis[1] = DotProduct (pface->texinfo->vecs[0], vup);
+	p_saxis[2] = DotProduct (pface->texinfo->vecs[0], vpn);
+
+	p_taxis[0] = DotProduct (pface->texinfo->vecs[1], vright);
+	p_taxis[1] = DotProduct (pface->texinfo->vecs[1], vup);
+	p_taxis[2] = DotProduct (pface->texinfo->vecs[1], vpn);
 
 	t = xscaleinv * mipscale;
 	d_sdivzstepu = p_saxis[0] * t;
@@ -148,7 +153,9 @@ void D_CalcGradients (msurface_t *pface)
 	d_tdivzorigin = p_taxis[2] * mipscale - xcenter * d_tdivzstepu -
 			ycenter * d_tdivzstepv;
 
-	VectorScale (transformed_modelorg, mipscale, p_temp1);
+	p_temp1[0] = transformed_modelorg[0] * mipscale;
+	p_temp1[1] = transformed_modelorg[1] * mipscale;
+	p_temp1[2] = transformed_modelorg[2] * mipscale;
 
 	t = 0x10000*mipscale;
 	sadjust = ((fixed16_t)(DotProduct (p_temp1, p_saxis) * 0x10000 + 0.5)) -
@@ -178,6 +185,9 @@ void D_DrawSurfaces (void)
 	surfcache_t		*pcurrentcache;
 	vec3_t			world_transformed_modelorg;
 	vec3_t			local_modelorg;
+	qboolean		needbuild;
+	drawsurf_t		ds;
+	int				waitjob;
 
 	currententity = &cl_entities[0];
 	TransformVector (modelorg, transformed_modelorg);
@@ -201,6 +211,8 @@ void D_DrawSurfaces (void)
 	}
 	else
 	{
+	// surfaces become jobs that either core runs (d_jobs.c); sky, water and background are
+	// drawn here and only their z fill is queued
 		for (s = &surfaces[1] ; s<surface_p ; s++)
 		{
 			if (!s->spans)
@@ -220,7 +232,8 @@ void D_DrawSurfaces (void)
 				}
 
 				D_DrawSkyScans8 (s->spans);
-				D_DrawZSpans (s->spans);
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
+					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWBACKGROUND)
 			{
@@ -231,7 +244,8 @@ void D_DrawSurfaces (void)
 				d_ziorigin = -0.9;
 
 				D_DrawSolidSurface (s, (int)r_clearcolor.value & 0xFF);
-				D_DrawZSpans (s->spans);
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
+					D_DrawZSpans (s->spans);
 			}
 			else if (s->flags & SURF_DRAWTURB)
 			{
@@ -258,7 +272,8 @@ void D_DrawSurfaces (void)
 
 				D_CalcGradients (pface);
 				Turbulent8 (s->spans);
-				D_DrawZSpans (s->spans);
+				if (!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, false, false, NULL, -1, s - surfaces))
+					D_DrawZSpans (s->spans);
 
 				if (s->insubmodel)
 				{
@@ -296,17 +311,35 @@ void D_DrawSurfaces (void)
 				miplevel = D_MipLevelForScale (s->nearzi * scale_for_mip
 				* pface->texinfo->mipadjust);
 
-			// FIXME: make this passed in to D_CacheSurface
-				pcurrentcache = D_CacheSurface (pface, miplevel);
+			// the surface-cache block is drawn on core 1 (d_jobs.c) unless the queue is full
+				pcurrentcache = D_CacheSurfaceDeferred (pface, miplevel, &needbuild, &ds);
+				waitjob = (!needbuild && pcurrentcache->buildframe == r_framecount) ?
+						pcurrentcache->buildjob : -1;
 
 				cacheblock = (pixel_t *)pcurrentcache->data;
 				cachewidth = pcurrentcache->width;
 
 				D_CalcGradients (pface);
 
-				(*d_drawspans) (s->spans);
-
-				D_DrawZSpans (s->spans);
+				if (d_drawspans != D_DrawSpans8 ||
+					!D_JobAdd (s->spans, d_ziorigin, d_zistepu, d_zistepv, true, needbuild, &ds, waitjob, s - surfaces))
+				{
+					if (needbuild)
+					{
+						r_drawsurf = ds;
+						R_DrawSurface ();
+						pcurrentcache->buildframe = -1;
+					}
+					else if (waitjob >= 0)
+						D_JobsWaitRange (waitjob, waitjob + 1);
+					(*d_drawspans) (s->spans);
+					D_DrawZSpans (s->spans);
+				}
+				else if (needbuild)
+				{
+					pcurrentcache->buildframe = r_framecount;
+					pcurrentcache->buildjob = D_JobsCount () - 1;
+				}
 
 				if (s->insubmodel)
 				{
@@ -326,6 +359,7 @@ void D_DrawSurfaces (void)
 				}
 			}
 		}
+		D_JobsPublished ();
 	}
 }
 

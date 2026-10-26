@@ -1,44 +1,47 @@
-This is a version of the Quake 1 engine that runs on the ESP32-P4-Function-EV-Board 
-when coupled with the ESP32-P4-HMI-SubBoard that contains a 1024x600 MIPI LCD. 
+This is a version of the Quake 1 engine that runs on the
+[Olimex ESP32-P4-PC](https://www.olimex.com/Products/IoT/ESP32-P4/ESP32-P4-PC/open-source-hardware),
+with video output over HDMI.
+
+It is a port of [espressif/esp32-quake](https://github.com/espressif/esp32-quake), which targets
+the ESP32-P4-Function-EV-Board with a 1024x600 MIPI LCD. See
+[Differences from the EV-Board version](#differences-from-the-ev-board-version) below for what
+changed.
 
 Features
 ========
 
  * Can run both the shareware as well as the registered version of Quake
 
- * Runs at 512x300 pixels upscaled to 1024x600 at a framerate of 20-25fps.
+ * Renders at 512x288 pixels, upscaled exactly 2.5x to 1280x720 HDMI, at around 18-20fps.
 
- * Audio support. Both digital sound, as well as music if a .cue/.bin image of the
-   original CDROM is provided.
+ * Audio support through the 3.5mm headphone jack. Both digital sound, as well as music if a
+   .cue/.bin image of the original CDROM is provided.
 
- * Supports USB keyboard for input
+ * Supports USB keyboard and mouse for input (full-speed devices only, see below)
 
- * Network multiplayer support over the LAN connector
+ * Network multiplayer support over the Ethernet port
 
 
 Hardware required
 =================
 
-As stated, you'll need an ESP32-P4-Function-EV-Board with the ESP32-P4-HMI-SubBoard that 
-contains a 1024x600 MIPI LCD. Versions tested are V1.4 for the EV-Board and v1.2 for the MIPI
-subboard. Note that aside from the MIPI FPC cable, you'll need to run some jumpers between
-the two boards (J6 on the sub-board to J1 on the EV-Board)
+ * An Olimex ESP32-P4-PC. Tested on hardware revision C with an ESP32-P4 chip revision v1.0.
 
-| Sub-board | EV board      |
-| --------- | ------------- |
-| 5V        | 5V            |
-| PWM       | GPIO26 ('26') |
-| RST_LCD   | GPIO27 ('27') |
-| GND       | GND           |
+ * An HDMI monitor or TV that accepts 1280x720 at 60Hz, and an HDMI cable.
 
-If you want sound, you'll have to connect a speaker to the SPK header. To control Quake,
-plug a USB keyboard into the USB-A receptacle J18 on the EVB-board. In theory, you can
-also connect a USB hub with a keyboard and mouse into this connector, but this has not
-been tested.
+ * A **full-speed** USB keyboard (and optionally mouse), plugged into any of the four USB-A
+   ports. Gaming keyboards and mice are usually full-speed; most basic office keyboards and
+   mice are low-speed and will **not** work. See [USB input](#usb-input) for why, and how to
+   check a device.
 
-You will also need a micro-SD card to put the Quake files on. The size depends on the 
-version of Quake you're going to put on there, but generally anything 2GiB or larger 
-will fit nearly any version of Quake out there.
+ * Headphones or powered speakers for the 3.5mm jack if you want sound. HDMI is video-only on
+   this board, and there is no onboard speaker amplifier.
+
+ * A micro-SD card to put the Quake files on. The size depends on the version of Quake you're
+   going to put on there, but generally anything 2GiB or larger will fit nearly any version of
+   Quake out there.
+
+ * A USB-C data cable for flashing; the USB-C port also powers the board.
 
 Quake game data
 ===============
@@ -76,8 +79,14 @@ micro-SD card.
 Copying the data
 ================
 
-Preferably, your micro-SD card is formatted as FAT: ExFAT may work but is untested. The
-data needs to be copied directly to the root of the micro-SD-card: most notably, the 'ID1'
+The micro-SD card must be formatted as FAT32 (or FAT). exFAT does **not** work: ESP-IDF's FAT
+driver is built without exFAT support, and the card will fail to mount. Cards larger than 32GB
+usually come formatted as exFAT, so reformat them first. On Linux, for example (this erases the
+card; replace `/dev/sdX1` with your card's partition):
+
+    sudo mkfs.vfat -F 32 -n QUAKE /dev/sdX1
+
+The data needs to be copied directly to the root of the micro-SD-card: most notably, the 'ID1'
 folder should be located in the root, not in a subfolder.
 
 If you want music (and the version of Quake you're using supports it - the shareware version
@@ -88,22 +97,54 @@ already comes with the required image.
 Compiling, flashing and running
 ===============================
 
-This project needs ESP-IDF v5.4 or later, or until v5.4 is released the master branch of ESP-IDF,
-to properly compile. (It will compile properly with v5.3, but USB host won't work making the
-game uncontrollable.) With a proper ESP-IDF installed, run:
+This project needs ESP-IDF v5.5.3 or a later v5.5.x release; it has been tested with v5.5.6.
+(Olimex notes that v5.5.0 through v5.5.2 lack ESP32-P4 fixes their board support relies on.)
+With a proper ESP-IDF installed and exported, run:
 
 - ``idf.py set-target esp32p4`` (only the first time)
 
-- ``idf.py flash``
+- ``idf.py -p PORT flash monitor``
 
-Now insert the micro-SD-card with the Quake data files into the devkit micro-SD slot,
-connect a keyboard to the USB-A connector, reset the board, and have fun!
+The USB-C port is the ESP32-P4's built-in USB Serial/JTAG, so no buttons are needed to flash;
+it shows up as e.g. `/dev/ttyACM0` on Linux or a COM port on Windows. The serial console
+(game log and fps counter) is on the same port. On Linux, your user needs to be in the
+`dialout` group to open it.
+
+Now insert the micro-SD-card with the Quake data files into the board's micro-SD slot, connect
+the HDMI monitor and a keyboard, reset the board, and have fun! Connect HDMI before powering
+or resetting the board so the monitor syncs reliably.
+
+USB input
+---------
+
+The four USB-A ports sit behind an onboard high-speed (USB 2.0) hub. Talking to a full- or
+low-speed device through a high-speed hub needs the hub's transaction translator, which
+ESP-IDF's USB host does not support. As a workaround, this port runs the ESP32-P4's USB host
+controller in full-speed-only mode, so the hub works as a full-speed hub. Full-speed keyboards
+and mice then work (tested with a gaming keyboard and a 1000Hz gaming mouse), but low-speed
+devices still fail to enumerate behind the hub; the serial log shows
+`ENUM: [1:x] CHECK_SHORT_DEV_DESC FAILED` for them.
+
+To check a device's speed, plug it into a Linux PC and run `lsusb -t`: `12M` is full-speed
+and works, `1.5M` is low-speed and does not.
+
+Quake turns with the mouse by default; for full mouse look, enable "Always Mouse Look" in the
+Options menu or type `+mlook` in the console.
+
+Chip revision
+-------------
+
+`sdkconfig.defaults` sets `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y`, which builds for ESP32-P4
+chip revisions below v3.0, as found on current ESP32-P4-PC boards. ESP-IDF v5.5 otherwise
+defaults to revision v3.0 and newer, which is not compatible with older chips. If your board
+has a v3.x chip (`esptool.py chip_id` prints the revision), remove that line and run
+`idf.py fullclean` before building.
 
 
 Network play
 ============
 
-Network play is possible by connecting the RJ-45 Ethernet port of the devkit to a network.
+Network play is possible by connecting the RJ-45 Ethernet port of the board to a network.
 On startup, the ESP32P4 will request an IP via DHCP.
 
 When connecting to a server, you should enter its IP directly in the 'Join game at' field,
@@ -121,21 +162,62 @@ of Quake should be able to connect to it. Simply select the ``New game`` option 
 ``multiplayer`` menu. Note that clients also should connect to the game using the 
 ``Join game at`` method.
 
-Porting
-=======
+Benchmarking and profiling
+==========================
 
-This version of Quake heavily relies on the esp-bsp to abstract away any details in hardware
-the game is running on. It should be fairly easy to port to any other board that has an esp-bsp
-implementation. However, no such attempt has been made and as such, there may be issues lurking
-in dark corners.
+After boot, the game plays demo1 behind the menu. The first 10 seconds of it (from its second
+frame, so level loading is excluded) are measured automatically, and a summary is printed on
+the serial console:
+
+    BENCH attract demo: 220 frames 10.02 seconds 21.96 fps
+    BENCH display (core 1) per frame: palette convert 7.91 ms, PPA scale 22.84 ms
+    BENCH game (core 0) waited for display: 0.16 ms per frame
+
+This doesn't change what the game does and needs no input, so it is a convenient, repeatable
+baseline: consecutive runs agree to within about 0.3%. The window length is set in
+`idf.py menuconfig` under Quake → `QUAKE_BENCHMARK_SECONDS` (0 turns it off).
+
+A `timedemo` prints the same summary. To keep timedemos short, cap the number of timed frames
+with the `timedemo_frames` console variable, e.g. `timedemo_frames 300; timedemo demo1`.
+
+To see where the game core's time goes, enable `QUAKE_PROFILE` in menuconfig. During the
+benchmark window (or a timedemo), a timer interrupt on core 1 samples core 0's program counter
+2000 times a second from the ESP32-P4's ASSIST_DEBUG PC-recording register. Nothing extra runs
+on core 0, and measured fps is unchanged with sampling on. At the end of the window the samples
+are printed as `PROF` lines. Save the serial output and run:
+
+    idf.py monitor | tee profile.log      # wait for PROF_END, then exit with Ctrl+]
+    tools/profile_report.py profile.log build/quake.elf --top 30
+
+This prints the share of samples per function; `--lines` also lists the hottest source lines.
+
+Differences from the EV-Board version
+=====================================
+
+The ESP32-P4-PC is close to the ESP32-P4-Function-EV-Board: the SD slot, Ethernet PHY, audio
+codec, I2C/I2S pins and flash are wired the same way, and Olimex's own demo firmware uses
+Espressif's EV-Board BSP. The differences, and how this port handles them:
+
+| | EV-Board + MIPI LCD | ESP32-P4-PC | This port |
+| --- | --- | --- | --- |
+| Display | 1024x600 MIPI LCD, RGB565, PWM backlight on GPIO26 | HDMI via an onboard LT8912B DSI-to-HDMI bridge, which needs RGB888 | 1280x720@60 HDMI; the PPA scales and converts RGB565 to RGB888. No backlight control: in HDMI mode the BSP's backlight pin is GPIO23, which is the UEXT I2C_SCL2 pin here |
+| Render size | 512x300 | 1280x720 is 16:9 | 512x288, an exact 2.5x scale |
+| Serial console | UART via a USB-UART bridge | USB-C is the chip's USB Serial/JTAG | Console on USB Serial/JTAG |
+| SD card power | Always on | Switched by GPIO45 (SD1_PWR_EN, active low) | Powered on at startup; mounted at 20MHz, the speed Olimex validated |
+| USB host | One USB-A port, keyboard connected directly | Four USB-A ports behind an FE1.1s high-speed hub, reset on GPIO21 (active low) | Hub reset pulsed at startup; host forced to full-speed so full-speed devices work behind the hub (low-speed devices don't, see [USB input](#usb-input)) |
+| Audio output | Speaker amplifier enabled by GPIO53 | 3.5mm headphone jack only; GPIO53 is the UEXT SPI MOSI pin | Unchanged; the BSP still toggles GPIO53, which only matters if something is attached to UEXT |
+
+The board support package in `components/esp-bsp` is the HDMI-capable snapshot from Olimex's
+[p4_board_demo](https://github.com/OLIMEX/ESP32-P4-PC/tree/main/SOFTWARE/ESP-IDF/p4_board_demo),
+which carries a few HDMI timing and audio fixes over Espressif's esp32_p4_function_ev_board
+BSP v5.2.0. Board pin assignments come from the ESP32-P4-PC Rev.C schematic.
 
 Credits
 =======
 
 This is based on [quake-generic](https://github.com/erysdren/quakegeneric) by erysdren, which 
 in turn is based on the [Quake sources](https://github.com/id-Software/Quake) released by 
-Id Software.
-
-
-
-
+Id Software. The original ESP32-P4 port is
+[espressif/esp32-quake](https://github.com/espressif/esp32-quake). The board support package
+is from [OLIMEX/ESP32-P4-PC](https://github.com/OLIMEX/ESP32-P4-PC), based on Espressif's
+[esp-bsp](https://github.com/espressif/esp-bsp).

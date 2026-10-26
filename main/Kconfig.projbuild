@@ -1,0 +1,97 @@
+menu "Quake"
+
+    config QUAKE_BENCHMARK_SECONDS
+        int "Benchmark the first N seconds of the attract-mode demo (0 = off)"
+        default 10
+        range 0 120
+        help
+            After boot the game plays demo1 in the background of the menu. Its first
+            N seconds (from its second frame) are measured: average fps and a timing
+            breakdown of the display pipeline are printed on the console. This needs
+            no input and does not change what the game does. A timedemo produces the
+            same report when it finishes.
+
+    config QUAKE_MEMBENCH
+        bool "Run a memory hierarchy benchmark at boot"
+        default n
+        help
+            Measures load latency and read/write/memcpy bandwidth of the TCM, internal SRAM
+            and PSRAM (L1-, L2-resident and uncached sizes) and GDMA copy throughput, once
+            before the display starts and once with HDMI scan-out running. Prints MEMBENCH
+            lines. Adds a few seconds to boot.
+
+    config QUAKE_SCREENSHOTS
+        int "After the benchmark, dump N screenshots on the console (0 = off)"
+        default 0
+        range 0 10
+        help
+            For checking the picture without a monitor. After the attract-demo benchmark
+            window, every 100th presented frame (8-bit pixels plus palette) is printed as
+            hex "SHOT" lines; tools/screenshots.py turns them into PNG files. Printing a
+            frame takes a few seconds, during which the game is stalled.
+
+    config QUAKE_PROFILE
+        bool "Sample the game core's program counter while benchmarking"
+        default n
+        help
+            During a benchmark window or timedemo, a timer interrupt on core 1 reads
+            core 0's current program counter from the ASSIST_DEBUG PC-recording
+            register. Nothing runs on core 0, so the game is not slowed down. At the
+            end of the window, the sampled PCs are printed as "PROF <pc> <count>"
+            lines; tools/profile_report.py maps them to functions.
+
+    config QUAKE_PROFILE_CORE1
+        bool "Also sample core 1 (from a timer interrupt on core 0)"
+        depends on QUAKE_PROFILE
+        default n
+        help
+            Costs core 0 a little time (about 0.2% at 2 kHz). Core 1 samples are printed
+            as "PROF1 <pc> <count>"; use tools/profile_report.py --core 1.
+
+    config QUAKE_PROFILE_SAMPLE_HZ
+        int "Sample rate (Hz)"
+        depends on QUAKE_PROFILE
+        default 2000
+        range 100 20000
+
+    config QUAKE_PROFILE_MAX_SAMPLES
+        int "Maximum number of samples (4 bytes each, in PSRAM)"
+        depends on QUAKE_PROFILE
+        default 262144
+
+    config QUAKE_TIMEDEMO_LOOP
+        bool "Benchmark mode: run timedemo demo1 in a loop"
+        default n
+        help
+            Instead of the attract-mode demos, start "timedemo demo1" at boot. When it
+            finishes, its result ("N frames T seconds F fps") stays on the console, which
+            fills the screen; 3 seconds later the timedemo runs again, forever. Each run is
+            also reported on the serial console as a "BENCH timedemo" block.
+
+    config QUAKE_NATIVE_1280x720
+        bool "Render 1280x720 natively (no upscaling)"
+        depends on BSP_LCD_HDMI_1280x720_60HZ
+        default n
+        help
+            With the 1280x720 HDMI mode, render the game at 1280x720 instead of 512x288 scaled
+            up 2.5x by the PPA. 3x the pixels of 640x480, so expect a low frame rate. To fit
+            PSRAM, the hunk shrinks to 10 MB and the surface cache to the stock size.
+
+    config QUAKE_L2_AUTOLOAD
+        bool "L2 cache hardware autoload on the surface cache and hunk (unsafe)"
+        default n
+        help
+            Prefetches the next cache line on misses and hits in the two regions (vid_null.c).
+            Worth ~1.5% fps, but with it on the game crashed on corrupted data 3 times in 11
+            minutes, and 0 times in 19 minutes with it off (PERF_LOG.md, stability
+            investigation). Off by default.
+
+    config QUAKE_STABILITY_DEBUG
+        bool "Stability diagnostics (reset record, stall watchdog, black-frame log)"
+        default n
+        help
+            Prints the reset reason and the previous run's last state at boot, reports
+            frame stalls with both cores' sampled program counters, and logs runs of
+            black frames. Output lines start with "STAB" (main/stability.c).
+
+endmenu

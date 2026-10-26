@@ -32,8 +32,28 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //#define QUAKEGENERIC_RES_Y (200)
 
 
+#include "sdkconfig.h"
+#if CONFIG_BSP_LCD_HDMI_640x480_60HZ
+// 640x480 HDMI: rendered at the display resolution, no scaling
+#define QUAKEGENERIC_RES_X 640
+#define QUAKEGENERIC_RES_Y 480
+#define QUAKEGENERIC_DISPLAY_ASPECT (4.0/3.0)
+#elif CONFIG_BSP_LCD_HDMI_800x600_60HZ
+// 800x600 HDMI, rendered at the display resolution; the image is drawn for a 16:9 screen (the
+// monitor stretches the 4:3 signal), so the pixels are 4:3 wide (vid.aspect)
+#define QUAKEGENERIC_RES_X 800
+#define QUAKEGENERIC_RES_Y 600
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
+#elif CONFIG_QUAKE_NATIVE_1280x720
+// 1280x720 HDMI, rendered at the display resolution (no scaling)
+#define QUAKEGENERIC_RES_X 1280
+#define QUAKEGENERIC_RES_Y 720
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
+#else
 #define QUAKEGENERIC_RES_X 512
-#define QUAKEGENERIC_RES_Y 300
+#define QUAKEGENERIC_RES_Y 288 // 16:9; scales exactly 2.5x to 1280x720 HDMI
+#define QUAKEGENERIC_DISPLAY_ASPECT (16.0/9.0)
+#endif
 
 #define QUAKEGENERIC_JOY_MAX_AXES 6
 #define QUAKEGENERIC_JOY_AXIS_X 0
@@ -45,7 +65,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 
 // provided functions
-void QG_Tick(double duration);
+void QG_Tick(float duration);
 void QG_Create(int argc, char *argv[]);
 
 // user must implement these
@@ -56,5 +76,12 @@ void QG_SetPalette(unsigned char palette[768]);
 int QG_GetKey(int *down, int *key);
 void QG_GetMouseMove(int *x, int *y);
 void QG_GetJoyAxes(float *axes);
+//called when a timedemo starts timing (second demo frame) and when it finishes
+void QG_TimeDemoStart(void);
+void QG_TimeDemoEnd(int frames, float seconds);
+//asynchronous SRAM -> PSRAM copies (main/bandcopy.c); a ticket of 0 means already done
+int QG_CopyInit(void);
+uint32_t QG_CopyStart(void *dst, void *src, size_t n);
+void QG_CopyWait(uint32_t ticket);
 
 #endif // __QUAKEGENERIC__

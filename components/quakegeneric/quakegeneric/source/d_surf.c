@@ -127,6 +127,20 @@ void D_FlushCaches (void)
 D_SCAlloc
 =================
 */
+/*
+D_SCAllocFreeing
+
+ESP32-P4 port: surface drawing is deferred to jobs that run until the end of the frame
+(d_jobs.c), so a block used earlier in this frame may still be read or rebuilt by a queued
+job. Before such a block is freed (and its memory reused, header included), wait for all
+queued jobs.
+*/
+static void D_SCAllocFreeing (surfcache_t *c)
+{
+	if (c->usedframe == r_framecount)
+		D_JobsWaitAll ();
+}
+
 surfcache_t     *D_SCAlloc (int width, int size)
 {
 	surfcache_t             *new;
@@ -158,7 +172,10 @@ surfcache_t     *D_SCAlloc (int width, int size)
 // colect and free surfcache_t blocks until the rover block is large enough
 	new = sc_rover;
 	if (sc_rover->owner)
+	{
+		D_SCAllocFreeing (sc_rover);
 		*sc_rover->owner = NULL;
+	}
 	
 	while (new->size < size)
 	{
@@ -167,7 +184,10 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		if (!sc_rover)
 			Sys_Error ("D_SCAlloc: hit the end of memory");
 		if (sc_rover->owner)
+		{
+			D_SCAllocFreeing (sc_rover);
 			*sc_rover->owner = NULL;
+		}
 			
 		new->size += sc_rover->size;
 		new->next = sc_rover->next;
@@ -193,6 +213,7 @@ surfcache_t     *D_SCAlloc (int width, int size)
 		new->height = (size - sizeof(*new) + sizeof(new->data)) / width;
 
 	new->owner = NULL;              // should be set properly after return
+	new->buildframe = -1;
 
 	if (d_roverwrapped)
 	{
@@ -255,6 +276,114 @@ int D_log2 (int num)
 }
 
 //=============================================================================
+
+/*
+================
+D_CacheSurfaceDeferred
+
+D_CacheSurface without the drawing (ESP32-P4 port, see d_jobs.c): finds or allocates the
+cache block and returns it. If the block needs (re)drawing, *needbuild is set and *ds holds
+the r_drawsurf setup for R_DrawSurface, which the caller runs later (on the other core).
+Doesn't touch the global r_drawsurf, which the other core uses while building.
+================
+*/
+// statistics for the benchmark report: surface-cache blocks built, their texels, and how
+// many were built because of dynamic lights
+int d_stat_builds, d_stat_buildtexels, d_stat_dlightbuilds;
+
+/*
+D_DlightKey
+
+Hash of the dynamic lights that R_AddDynamicLights will apply to a surface (index, origin,
+radius, minlight). A surface lit by the same lights as last time doesn't need rebuilding.
+*/
+static unsigned D_DlightKey (msurface_t *surface)
+{
+	unsigned	h = 2166136261u;
+	int			lnum, i;
+	unsigned	w[6];
+
+	for (lnum = 0 ; lnum < MAX_DLIGHTS ; lnum++)
+	{
+		if (!(surface->dlightbits & (1 << lnum)))
+			continue;
+		w[0] = lnum;
+		memcpy (&w[1], cl_dlights[lnum].origin, 12);
+		memcpy (&w[4], &cl_dlights[lnum].radius, 4);
+		memcpy (&w[5], &cl_dlights[lnum].minlight, 4);
+		for (i = 0 ; i < 6 ; i++)
+			h = (h ^ w[i]) * 16777619u;
+	}
+	return h;
+}
+
+surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds)
+{
+	surfcache_t     *cache;
+	qboolean		dlit = (surface->dlightframe == r_framecount);
+	unsigned		dlightkey = dlit ? D_DlightKey (surface) : 0;
+
+	ds->texture = R_TextureAnimation (surface->texinfo->texture);
+	ds->lightadj[0] = d_lightstylevalue[surface->styles[0]];
+	ds->lightadj[1] = d_lightstylevalue[surface->styles[1]];
+	ds->lightadj[2] = d_lightstylevalue[surface->styles[2]];
+	ds->lightadj[3] = d_lightstylevalue[surface->styles[3]];
+
+	cache = surface->cachespots[miplevel];
+
+	// (unlike the original, a dynamically lit block is reused if the same lights hit it)
+	if (cache && cache->dlight == dlit && cache->dlightkey == dlightkey
+			&& cache->texture == ds->texture
+			&& cache->lightadj[0] == ds->lightadj[0]
+			&& cache->lightadj[1] == ds->lightadj[1]
+			&& cache->lightadj[2] == ds->lightadj[2]
+			&& cache->lightadj[3] == ds->lightadj[3] )
+	{
+		cache->usedframe = r_framecount;
+		*needbuild = false;
+		return cache;
+	}
+
+	surfscale = 1.0 / (1<<miplevel);
+	ds->surfmip = miplevel;
+	ds->surfwidth = surface->extents[0] >> miplevel;
+	ds->rowbytes = ds->surfwidth;
+	ds->surfheight = surface->extents[1] >> miplevel;
+
+	if (!cache)     // if a texture just animated, don't reallocate it
+	{
+		cache = D_SCAlloc (ds->surfwidth,
+						   ds->surfwidth * ds->surfheight);
+		surface->cachespots[miplevel] = cache;
+		cache->owner = &surface->cachespots[miplevel];
+		cache->mipscale = surfscale;
+	}
+
+	if (surface->dlightframe == r_framecount)
+		cache->dlight = 1;
+	else
+		cache->dlight = 0;
+
+	ds->surfdat = (pixel_t *)cache->data;
+
+	cache->texture = ds->texture;
+	cache->lightadj[0] = ds->lightadj[0];
+	cache->lightadj[1] = ds->lightadj[1];
+	cache->lightadj[2] = ds->lightadj[2];
+	cache->lightadj[3] = ds->lightadj[3];
+
+	ds->surf = surface;
+	cache->usedframe = r_framecount;
+	cache->dlightkey = dlightkey;
+
+	c_surf++;
+	d_stat_builds++;
+	d_stat_buildtexels += ds->surfwidth * ds->surfheight;
+	if (surface->dlightframe == r_framecount)
+		d_stat_dlightbuilds++;
+	*needbuild = true;
+	return cache;
+}
 
 /*
 ================
@@ -331,5 +460,6 @@ surfcache_t *D_CacheSurface (msurface_t *surface, int miplevel)
 
 	return surface->cachespots[miplevel];
 }
+
 
 

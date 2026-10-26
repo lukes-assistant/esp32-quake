@@ -156,7 +156,7 @@ If the line width has changed, reformat the buffer.
 void Con_CheckResize (void)
 {
 	int		i, j, width, oldwidth, oldtotallines, numlines, numchars;
-	char	tbuf[CON_TEXTSIZE];
+	static EXT_RAM_BSS_ATTR char	tbuf[CON_TEXTSIZE];
 
 	width = (vid.width >> 3) - 2;
 
@@ -623,7 +623,7 @@ Con_NotifyBox
 */
 void Con_NotifyBox (char *text)
 {
-	double		t1, t2;
+	float		t1, t2;
 
 // during startup for sound / cd warnings
 	Con_Printf("\n\n\35\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\36\37\n");

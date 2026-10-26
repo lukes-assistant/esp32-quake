@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_main.c  -- client main loop
 
 #include "quakedef.h"
+void R_PipeSync (void);
 #include "esp_attr.h"
 
 // we need to declare some mouse variables here, because the menu system
@@ -45,9 +46,10 @@ cvar_t	m_side = {"m_side","0.8", true};
 client_static_t	cls;
 client_state_t	cl;
 // FIXME: put these on hunk?
-//note: not on extram as these are used a lot (0.5fps increase)
-efrag_t			cl_efrags[MAX_EFRAGS];
-entity_t		cl_static_entities[MAX_STATIC_ENTITIES];
+// ESP32-P4-PC: moved to PSRAM to free internal SRAM for band buffers; no measurable
+// fps change at 25.6 fps (an earlier build measured +0.5 fps with them internal)
+EXT_RAM_BSS_ATTR efrag_t			cl_efrags[MAX_EFRAGS];
+EXT_RAM_BSS_ATTR entity_t		cl_static_entities[MAX_STATIC_ENTITIES];
 lightstyle_t	cl_lightstyle[MAX_LIGHTSTYLES];
 dlight_t		cl_dlights[MAX_DLIGHTS];
 
@@ -66,6 +68,8 @@ CL_ClearState
 void CL_ClearState (void)
 {
 	int			i;
+
+	R_PipeSync ();	// core 1 may still be drawing the last frame (r_pipe.c)
 
 	if (!sv.active)
 		Host_ClearMemory ();
@@ -702,6 +706,7 @@ void CL_Init (void)
 // register our commands
 //
 	Cvar_RegisterVariable (&cl_name);
+	Cvar_RegisterVariable (&timedemo_frames);
 	Cvar_RegisterVariable (&cl_color);
 	Cvar_RegisterVariable (&cl_upspeed);
 	Cvar_RegisterVariable (&cl_forwardspeed);

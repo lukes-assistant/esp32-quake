@@ -19,6 +19,28 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 // mathlib.h
 
+// ESP32-P4 port: the FPU is single precision, so use the float versions of the libm functions
+// Quake calls with float arguments (the double ones are software routines)
+#include <math.h>
+#define sqrt(x)		sqrtf(x)
+#define sin(x)		sinf(x)
+#define cos(x)		cosf(x)
+#define atan2(y,x)	atan2f(y,x)
+#define atan(x)		atanf(x)
+#define tan(x)		tanf(x)
+#define floor(x)	floorf(x)
+#define ceil(x)		ceilf(x)
+#define fabs(x)		fabsf(x)
+#define pow(x,y)	powf(x,y)
+
+// ceil() to int in one instruction (fcvt.w.s with round-up) instead of a libm call
+static inline int Q_ceil_int (float x)
+{
+	int r;
+	__asm__ ("fcvt.w.s %0, %1, rup" : "=r"(r) : "f"(x));
+	return r;
+}
+
 typedef float vec_t;
 typedef vec_t vec3_t[3];
 typedef vec_t vec5_t[5];
@@ -61,7 +83,7 @@ int Q_log2(int val);
 void R_ConcatRotations (float in1[3][3], float in2[3][3], float out[3][3]);
 void R_ConcatTransforms (float in1[3][4], float in2[3][4], float out[3][4]);
 
-void FloorDivMod (double numer, double denom, int *quotient,
+void FloorDivMod (float numer, float denom, int *quotient,
 		int *rem);
 fixed16_t Invert24To16(fixed16_t val);
 int GreatestCommonDivisor (int i1, int i2);

@@ -19,13 +19,19 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/d_init.c
 	${QUAKE_SOURCE_DIR}/source/d_modech.c
 	${QUAKE_SOURCE_DIR}/source/d_part.c
+	${QUAKE_SOURCE_DIR}/source/d_part_c1.c
+	${QUAKE_SOURCE_DIR}/source/r_sprite_c1.c
+	${QUAKE_SOURCE_DIR}/source/d_sprite_c1.c
+	${QUAKE_SOURCE_DIR}/source/r_pipe.c
 	${QUAKE_SOURCE_DIR}/source/d_polyse.c
+	${QUAKE_SOURCE_DIR}/source/d_polyse_c1.c
 	${QUAKE_SOURCE_DIR}/source/d_scan.c
 	${QUAKE_SOURCE_DIR}/source/d_sky.c
 	${QUAKE_SOURCE_DIR}/source/d_sprite.c
 	${QUAKE_SOURCE_DIR}/source/d_surf.c
 	${QUAKE_SOURCE_DIR}/source/d_vars.c
 	${QUAKE_SOURCE_DIR}/source/d_zpoint.c
+	${QUAKE_SOURCE_DIR}/source/d_jobs.c
 	${QUAKE_SOURCE_DIR}/source/draw.c
 	${QUAKE_SOURCE_DIR}/source/host_cmd.c
 	${QUAKE_SOURCE_DIR}/source/host.c
@@ -46,7 +52,9 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/pr_edict.c
 	${QUAKE_SOURCE_DIR}/source/pr_exec.c
 	${QUAKE_SOURCE_DIR}/source/r_aclip.c
+	${QUAKE_SOURCE_DIR}/source/r_aclip_c1.c
 	${QUAKE_SOURCE_DIR}/source/r_alias.c
+	${QUAKE_SOURCE_DIR}/source/r_alias_c1.c
 	${QUAKE_SOURCE_DIR}/source/r_bsp.c
 	${QUAKE_SOURCE_DIR}/source/r_draw.c
 	${QUAKE_SOURCE_DIR}/source/r_edge.c
@@ -58,6 +66,8 @@ set(QUAKEGENERIC_SOURCES
 	${QUAKE_SOURCE_DIR}/source/r_sky.c
 	${QUAKE_SOURCE_DIR}/source/r_sprite.c
 	${QUAKE_SOURCE_DIR}/source/r_surf.c
+	${QUAKE_SOURCE_DIR}/source/r_surf_c1.c
+	${QUAKE_SOURCE_DIR}/source/r_zrows.c
 	${QUAKE_SOURCE_DIR}/source/r_vars.c
 	${QUAKE_SOURCE_DIR}/source/sbar.c
 	${QUAKE_SOURCE_DIR}/source/screen.c
@@ -81,6 +91,10 @@ set(QUAKEGENERIC_SOURCES
 idf_component_register(
 	SRCS ${QUAKEGENERIC_SOURCES}
 	INCLUDE_DIRS ${QUAKE_SOURCE_DIR}/source/
+	LDFRAGMENTS linker.lf
 )
 
 idf_build_set_property(COMPILE_OPTIONS "-w" APPEND) # Suppress all warnings (which are often reported as errors)
+target_compile_options(${COMPONENT_LIB} PRIVATE -O3)
+target_compile_options(${COMPONENT_LIB} PRIVATE -fsingle-precision-constant)
+target_compile_options(${COMPONENT_LIB} PRIVATE -fno-math-errno)

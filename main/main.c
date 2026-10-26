@@ -18,7 +18,10 @@
 #include <stdint.h>
 #include <string.h>
 #include "bsp/esp-bsp.h"
+#include "driver/gpio.h"
+#include "sd_protocol_defs.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "quakegeneric.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,6 +31,8 @@
 #include "font_8x16.h"
 #include "input.h"
 #include "display.h"
+#include "profile.h"
+#include "stability.h"
 
 #include "quakedef.h"
 
@@ -44,32 +49,79 @@ static void quake_task(void *param) {
 	char *argv[]={
 		"quake", 
 		"-basedir", "/sdcard/",
+#if CONFIG_QUAKE_TIMEDEMO_LOOP
+		//runs (from quake.rc's stuffcmds) before startdemos, which then skips the attract loop
+		"+timedemo", "demo1",
+#endif
 		NULL
 	};
 	//initialize Quake
-	QG_Create(3, argv);
+	QG_Create(sizeof(argv)/sizeof(argv[0])-1, argv);
 
 	int64_t oldtime_us = esp_timer_get_time();
 	while (1) {
 		// Run the frame at the correct duration.
 		int64_t newtime_us = esp_timer_get_time();
-		QG_Tick((double)(newtime_us - oldtime_us)/1000000.0);
+		QG_Tick((float)(newtime_us - oldtime_us)*1e-6f);
+		stability_game_tick();
 		oldtime_us = newtime_us;
 	}
 }
 
+//Olimex ESP32-P4-PC board specifics (pins from the Rev.C schematic)
+#define SD_PWR_EN_GPIO	45	//SD1_PWR_EN, P-MOS high-side switch, active low
+#define HUB_RST_GPIO	21	//HUB_RST# of the FE1.1s USB hub, active low
+
+
+static void board_init(void) {
+	gpio_config_t io={
+		.pin_bit_mask=(1ULL<<SD_PWR_EN_GPIO)|(1ULL<<HUB_RST_GPIO),
+		.mode=GPIO_MODE_OUTPUT,
+	};
+	gpio_set_level(SD_PWR_EN_GPIO, 0);	//SD card power on
+	gpio_set_level(HUB_RST_GPIO, 0);	//hold USB hub in reset...
+	ESP_ERROR_CHECK(gpio_config(&io));
+	vTaskDelay(pdMS_TO_TICKS(20));
+	gpio_set_level(HUB_RST_GPIO, 1);	//...then release it
+	vTaskDelay(pdMS_TO_TICKS(100));		//let SD power and the hub settle
+}
+
+static void sdcard_mount(void) {
+	//The BSP default is 40MHz; Olimex validated the SD slot on this board at 20MHz
+	sdmmc_host_t host;
+	bsp_sdcard_get_sdmmc_host(SDMMC_HOST_SLOT_0, &host);
+	host.max_freq_khz=SDMMC_FREQ_DEFAULT;
+	bsp_sdcard_cfg_t cfg={
+		.host=&host,
+	};
+	esp_err_t err=bsp_sdcard_sdmmc_mount(&cfg);
+	if (err!=ESP_OK) printf("SD card mount failed: %s\n", esp_err_to_name(err));
+}
+
+void membench_run(const char *when);
+
 void app_main() {
-	bsp_sdcard_mount();
+	stability_boot_report();
+	board_init();
+	QG_CopyInit();
+	membench_run("idle bus (before the display starts)");
+	profile_init();
+	sdcard_mount();
 	display_init();
+	stability_init();
+	membench_run("HDMI 640x480@60 scan-out running");
 
 	ethernet_connect();
 
 	input_init();
 
-	int stack_depth=200*1024;
+	//The renderer's big edge/surface/span arrays are static (internal SRAM), so the
+	//stack is small and can live in internal SRAM too.
+	//peak use ~9.7 KB (BENCH stack report, timedemo demo1 at 800x600)
+	int stack_depth=16*1024;
 
 	StaticTask_t *taskbuf=calloc(1, sizeof(StaticTask_t));
-	uint8_t *stackbuf=calloc(stack_depth, 1);
+	uint8_t *stackbuf=heap_caps_calloc(stack_depth, 1, MALLOC_CAP_INTERNAL);
 	xTaskCreateStaticPinnedToCore(quake_task, "quake", stack_depth, NULL, 2, (StackType_t*)stackbuf, taskbuf, 0);
 }
 

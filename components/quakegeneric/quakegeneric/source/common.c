@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // common.c -- misc functions used in client and server
 
 #include "quakedef.h"
+#include "esp_attr.h"
 
 #define NUM_SAFE_ARGVS  7
 
@@ -350,7 +351,7 @@ int Q_atoi (char *str)
 
 float Q_atof (char *str)
 {
-	double			val;
+	float			val;
 	int             sign;
 	int             c;
 	int             decimal, total;
@@ -1622,7 +1623,7 @@ pack_t *COM_LoadPackFile (char *packfile)
 	int                             numpackfiles;
 	pack_t                  *pack;
 	int                             packhandle;
-	dpackfile_t             info[MAX_FILES_IN_PACK];
+	static EXT_RAM_BSS_ATTR dpackfile_t             info[MAX_FILES_IN_PACK];
 	unsigned short          crc;
 
 	if (Sys_FileOpenRead (packfile, &packhandle) == -1)

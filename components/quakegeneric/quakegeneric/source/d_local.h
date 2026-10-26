@@ -45,6 +45,10 @@ typedef struct surfcache_s
 	unsigned			height;		// DEBUG only needed for debug
 	float				mipscale;
 	struct texture_s	*texture;	// checked for animating textures
+	int					usedframe;	// r_framecount when last used (d_jobs.c may still use it)
+	unsigned			dlightkey;	// hash of the dynamic lights it was built with
+	int					buildframe;	// r_framecount when a job was queued to build it, and
+	int					buildjob;	//  that job: later jobs drawing from it wait for it
 	byte				data[4];	// width*height elements
 } surfcache_t;
 
@@ -102,4 +106,25 @@ extern int		d_minmip;
 extern float	d_scalemip[3];
 
 extern void (*d_drawspans) (espan_t *pspan);
+
+// r_zrows.c: per-row column range where the world z-buffer is needed
+extern short d_zrowmin[MAXHEIGHT], d_zrowmax[MAXHEIGHT];
+void R_ComputeZRows (void);
+
+// d_jobs.c: world surface drawing shared with the second core
+void D_JobsBeginFrame (void);
+int D_JobsCount (void);
+qboolean D_JobAdd (espan_t *spans, float ziorigin, float zistepu, float zistepv,
+		qboolean color, qboolean needbuild, const drawsurf_t *ds, int waitjob, int surf);
+void D_JobsPublished (void);
+void D_JobsWaitRange (int first, int last);
+void D_JobsEndFrame (void);
+void D_JobsWaitAll (void);
+void D_JobsWakeWorker (void);
+void D_SetZBuffer (short *zbuffer);
+// d_polyse.c: the view model's own z-buffer
+extern qboolean	d_alias_gunz;
+extern unsigned	*d_gunzbuffer;
+void D_PolysetGunBegin (void);
+surfcache_t *D_CacheSurfaceDeferred (msurface_t *surface, int miplevel, qboolean *needbuild, drawsurf_t *ds);
 

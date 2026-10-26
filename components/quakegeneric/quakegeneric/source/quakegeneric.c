@@ -20,16 +20,53 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
-void QG_Tick(double duration)
+#if CONFIG_QUAKE_TIMEDEMO_LOOP
+// Benchmark mode: the first timedemo is started from the command line (main.c); whenever one
+// has finished (its result is on the console, which fills the screen once disconnected),
+// wait 3 seconds and run it again.
+static void QG_TimeDemoLoop (void)
+{
+	static float	next = -1;
+	static qboolean	started;	// the command line's timedemo has begun
+
+	if (cls.demoplayback || cls.state != ca_disconnected)
+	{
+		started |= cls.timedemo;
+		next = -1;
+		return;
+	}
+	if (!started)
+		return;
+	if (next < 0)
+	{
+		next = realtime + 3;
+		Con_Printf ("next timedemo demo1 in 3 seconds\n");
+	}
+	else if (realtime >= next)
+	{
+		next = -1;
+		Cbuf_AddText ("timedemo demo1\n");
+	}
+}
+#endif
+
+void QG_Tick(float duration)
 {
 	Host_Frame(duration);
+#if CONFIG_QUAKE_TIMEDEMO_LOOP
+	QG_TimeDemoLoop ();
+#endif
 }
 
 void QG_Create(int argc, char *argv[])
 {
 	static quakeparms_t    parms;
 
-	parms.memsize = 20*1024*1024;
+#if CONFIG_QUAKE_NATIVE_1280x720
+	parms.memsize = 10*1024*1024;	// (native 1280x720: the frame/z buffers take the PSRAM)
+#else
+	parms.memsize = 16*1024*1024;	// (ESP32-P4 port: was 20 MB; PSRAM is also needed for the frame pipeline, r_pipe.c)
+#endif
 	parms.membase = malloc (parms.memsize);
 	parms.basedir = ".";
 

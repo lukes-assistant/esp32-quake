@@ -1,0 +1,1268 @@
+# Performance log — Quake on Olimex ESP32-P4-PC
+
+Append-only record of every performance experiment: what was tried, how, and the result.
+Newer entries go at the bottom; earlier entries are never edited.
+
+## Method
+
+- Board: Olimex ESP32-P4-PC Rev.C, ESP32-P4 chip rev v1.0, CPU 360 MHz, 32 MB PSRAM @ 200 MHz,
+  16 MB flash (QIO). ESP-IDF v5.5.6. HDMI 1280x720@60 RGB888 via LT8912B, double-buffered.
+- Render resolution 512x288 (scaled 2.5x by the PPA).
+- Metric: the built-in benchmark (`CONFIG_QUAKE_BENCHMARK_SECONDS`), which measures the first
+  N seconds of the attract-mode demo1 after boot: `BENCH attract demo: <frames> frames
+  <s> seconds <fps> fps`, plus display-pipeline timings on core 1.
+- Run-to-run variation: within ~0.3% (20 s window: 21.13 / 21.12 / 21.07 fps), so from
+  2026-10-24 one run per experiment, 10 s window.
+- Profiling (`CONFIG_QUAKE_PROFILE`): core 1 timer ISR samples core 0's PC at 2 kHz from the
+  ASSIST_DEBUG PC-recording register; no measurable fps cost (sampling off: 21.07 / 21.06).
+
+## 2026-10-24 — Baseline and first experiments
+
+Commit 72813d9 (profiling infrastructure).
+
+### Baseline profile (20 s window, 21.1 fps)
+- Core 0 (game) is the bottleneck: busy throughout; waits for the display only ~0.1 ms/frame.
+- Core 1 (display): palette convert ~8.0 ms + PPA scale ~22.4 ms per frame (~30 ms).
+- Core 0 hot spots: D_DrawSpans8 27.5%, D_DrawZSpans 9.8%, R_DrawSurfaceBlock8_mip0 8.9%,
+  R_LeadingEdge 3.0%, D_PolysetDrawSpans8 2.8%, R_DrawSurfaceBlock8_mip1 2.6%,
+  R_RecursiveWorldNode 2.3%, SND_PaintChannelFrom8 1.7%. Span fill + z fill + surface-cache
+  build together ~50%: memory-bound loops on PSRAM buffers.
+
+### Baseline, 10 s window
+- 220 frames, **21.96 fps**. Display: convert 7.91 ms, PPA 22.84 ms; game waited 0.16 ms/frame.
+  (10 s is faster than 20 s because the opening of demo1 is lighter.)
+
+### Experiment: PPA scaling disabled (diagnostic; HDMI output freezes)
+- Skipped `ppa_do_scale_rotate_mirror` in display.c.
+- **25.44 fps (+16%)**. The PPA's 2.76 MB/frame RGB888 writes to PSRAM slow core 0 by ~14%.
+- Reverted (diagnostic only).
+
+### Experiment: -O3 for the quakegeneric component (default -O2 from CONFIG_COMPILER_OPTIMIZATION_PERF)
+- `target_compile_options(${COMPONENT_LIB} PRIVATE -O3)` in components/quakegeneric/CMakeLists.txt.
+- **22.96 fps (+4.6%)**. Kept.
+
+### Experiment: hot renderer code in internal RAM (with -O3)
+- Linker fragment placing d_scan, d_edge, d_polyse, d_sprite, d_part, r_surf, r_edge, r_bsp,
+  r_draw, r_alias, r_main, r_misc, r_light, snd_mix, mathlib in IRAM (`noflash`), ~61 KB.
+- **23.21 fps (+1.1% vs -O3)**. Largest free internal block dropped 156 KB -> 95 KB.
+- Instruction fetch from PSRAM-XIP is not a major cost. Backed out for now: internal RAM is
+  more valuable for data.
+
+### Experiment: L2 cache 512 KB (with -O3)
+- `CONFIG_CACHE_L2_CACHE_512KB=y`.
+- **Does not link**: `--enable-non-contiguous-regions discards section .sbss...`, i.e. the
+  remaining 256 KB of L2MEM cannot hold IDF's static data. Not possible as things stand.
+
+### Experiment: L2 cache 128 KB, Quake task stack in internal RAM (with -O3)
+- `CONFIG_CACHE_L2_CACHE_128KB=y`; Quake's 200 KB task stack allocated with
+  `heap_caps_calloc(..., MALLOC_CAP_INTERNAL)` instead of calloc (which put it in PSRAM).
+  Largest free internal block 276 KB with the smaller cache.
+- **21.25 fps**.
+
+### Experiment: L2 cache 128 KB, Quake task stack in PSRAM (control for the above)
+- **19.73 fps**.
+- So: halving L2 (256 -> 128 KB) costs ~14% (22.96 -> 19.73); moving the stack to SRAM gains
+  +7.7% (19.73 -> 21.25). The stack is hot because R_EdgeDrawing keeps `ledges[2400]` and
+  `lsurfs[800]`, and R_ScanEdges its `basespans[3000]`, on the stack (~176 KB).
+- Both reverted: keep L2 at 256 KB and get the hot stack data into SRAM another way.
+
+### Other findings
+- CPU runs at 360 MHz; 400 MHz on rev < 3 chips needs `ESP_FORCE_400MHZ_ON_REV_LESS_V3`
+  (out of spec). Not used.
+- The PPA's blend unit supports L8 (CLUT) input in hardware, but ESP-IDF 5.5 doesn't expose
+  it ("TODO: Support CLUT" in hal/ppa_types.h). Could replace the CPU palette conversion.
+- 8 KB TCM ("SPM", 0x30100000) usable via SPM_IRAM_ATTR / SPM_DRAM_ATTR.
+- Engine objects are already built with the PIE SIMD extension enabled (Tag_RISCV_arch
+  includes xesppie), so PIE assembly can go into the hot files; FreeRTOS saves PIE state
+  lazily on context switch.
+
+## 2026-10-24 — Step 1: cheap memory-placement and build changes
+
+Current best before this step: -O3 for quakegeneric, 256 KB L2, 128 B lines: 22.96 fps
+(re-measured 22.95 fps with the peak-usage instrumentation below).
+
+### Instrumentation: peak edge/surface usage and Quake stack high-water mark
+- r_main.c tracks the peak `edge_p - r_edges` and `surface_p - surfaces` per frame; the
+  benchmark report prints them plus the Quake task's unused stack.
+- 10 s window: peak edges 579 (of 2400), peak surfaces 223 (of 800); Quake stack 200 KB with
+  20380 B never used, i.e. ~180 KB used, almost all of it R_EdgeDrawing's ledges/lsurfs
+  (~128 KB) and R_ScanEdges' basespans (~48 KB).
+- One 120 s window (demo1 + demo2; done once for buffer sizing, not to be repeated):
+  peak edges 833, peak surfaces 346. 24.71 fps over 120 s.
+
+### Ideas from three AI-written notes added by the user, checked against this checkout
+- Confirmed: d_scantable/zspantable are EXT_RAM_BSS_ATTR (PSRAM); D_DrawZSpans uses `double zi`
+  (4 soft-float calls per span: __extendsfdf2, 2x __muldf3, __fixdfsi); CACHE_SIZE is 32;
+  MAXHEIGHT/MAXWIDTH are 1024/1280; GCC emits no hardware-loop (esp.lp) instructions in
+  D_DrawSpans8; IDF's default L2 line for 256 KB is 64 B.
+- Built objects already include the A extension (zaamo/zalrsc) and xesppie; Zba/Zbb are absent.
+
+### Experiment: 64 B L2 cache lines (IDF default for 256 KB) instead of 128 B
+- **19.10 fps (-17% vs 22.95)**. Palette convert on core 1 also slowed (11.1 vs 8.0 ms).
+  PSRAM favours long bursts; 128 B lines are clearly better. Reverted to 128 B.
+
+### Experiment: R_EdgeDrawing/R_ScanEdges arrays static (internal SRAM), shrunk
+- `ledges`, `lsurfs` (R_EdgeDrawing) and `basespans` (R_ScanEdges) made `static`, so they are
+  in internal .bss instead of on the PSRAM stack. NUMSTACKEDGES 2400 -> 1200,
+  NUMSTACKSURFACES 800 -> 448 (peaks 833 / 346 seen), MAXSPANS 3000 -> 1200 (MAXSPANS only
+  sets how often spans are flushed). ~87 KB of internal RAM.
+- First attempt also cut the Quake stack to 32 KB internal: **boot loop** (HP_SYS_HP_WDT_RESET
+  right after Host_Init, no panic message). The stack overflowed during startup:
+  `-fstack-usage` showed big local arrays in COM_LoadPackFile (131 KB), R_AliasDrawModel
+  (88 KB, per frame), SV_SendClientDatagram (64 KB), R_RenderWorld (40 KB), Host_Loadgame_f
+  (33 KB), D_PolysetDraw (33 KB, per frame), CL_ParseServerInfo (33 KB),
+  R_DrawSolidClippedSubmodelPolygons (18 KB), Con_CheckResize (16 KB), D_DrawSprite (12 KB).
+- With the stack back at 200 KB in PSRAM: **23.74 fps (+3.4% vs 22.95)**. Internal RAM free
+  92 KB (largest block 45 KB).
+
+### Experiment: big local arrays made static (PSRAM bss), Quake stack 32 KB internal
+- The arrays listed above became `static EXT_RAM_BSS_ATTR` (engine is single-threaded and
+  none of these functions recurse). Quake task stack 32 KB in internal SRAM (16 KB unused).
+- **23.75 fps** — same as with the 200 KB PSRAM stack: once the big arrays are off the stack,
+  stack placement doesn't matter. Kept, because it frees the PSRAM stack and keeps the
+  per-frame alias arrays (finalverts/auxverts/spans) in fixed places that can later move to
+  SRAM. Internal RAM free 59 KB (largest block 31 KB).
+
+### Experiment: d_scantable / zspantable in internal RAM (removed EXT_RAM_BSS_ATTR)
+- **23.80 fps (+0.2%, noise)** for 8 KB of internal RAM. Reverted.
+
+### Experiment: `float zi` instead of `double zi` in D_DrawZSpans
+- Removes 4 soft-float calls per span (__extendsfdf2, 2x __muldf3, __fixdfsi); float's 24-bit
+  mantissa is ample for the 16 z bits stored.
+- **24.47 fps (+3.0% vs 23.75)**. Kept.
+
+### Experiment: -fsingle-precision-constant for quakegeneric
+- Unsuffixed FP constants (e.g. `0.5`) were promoting float expressions to soft-float double
+  all over the renderer and client. Variables declared double (e.g. `realtime`) keep their
+  precision.
+- **24.87 fps (+1.6% vs 24.47)**. Kept.
+
+### Experiment: remaining hot-path doubles -> float
+- `double` locals in R_LeadingEdge, R_RecursiveWorldNode and R_BmodelCheckBBox; FloorDivMod
+  and its caller in D_PolysetSetUpForLineScan (+ floor -> floorf); ceil -> ceilf in r_draw.c,
+  d_polyse.c, d_sprite.c. (The original Quake ran its renderer with the x87 in 24-bit
+  precision mode, Sys_LowFPPrecision, so float matches its real precision.)
+- No soft-double calls left in hot D_/R_ functions (only in per-frame/rare ones such as
+  R_EntityParticles, R_RotateBmodel, R_ViewChanged).
+- **25.63 fps (+3.1% vs 24.87)**. Kept. Note: the game now waits 1.6 ms/frame for the display
+  (core 1 ~30 ms/frame vs game ~39 ms/frame), so the display pipeline is close to becoming
+  the bottleneck.
+
+### Experiment: Zba/Zbb/Zbs for quakegeneric (-march=rv32imafc_zicsr_zifencei_zba_zbb_zbs_xesppie)
+- Built and linked, and GCC used min/max/shNadd in D_DrawSpans8, but the board panicked at
+  runtime: **Guru Meditation, Illegal instruction**. This ESP32-P4 (rev v1.0) does not
+  implement Zba/Zbb (one of the user-supplied notes claimed it did). Reverted.
+
+### Experiment: code/rodata from flash instead of PSRAM (SPIRAM_XIP_FROM_PSRAM off), flash 80 MHz
+- Idea from a user-supplied note: free the PSRAM bus from instruction fetches by executing
+  from flash (separate bus). Flash raised from 40 to 80 MHz QIO for this, which on the P4
+  requires minimum chip rev > v0.0 (set CONFIG_ESP32P4_REV_MIN_100; the chip is v1.0).
+- **24.57 fps (-4.1% vs 25.63)**. Flash fetches are slower than PSRAM via L2. Reverted
+  (XIP from PSRAM on, flash 40 MHz, min rev v0.0).
+
+Commit 739680e: step 1 changes kept so far (-O3, single-precision constants, static SRAM
+edge/surface/span arrays, big stack arrays static in PSRAM with a 32 KB internal stack, hot
+doubles -> float). Re-measured **25.64 fps** (from 21.96 baseline: +17%).
+
+### Experiment: colormap copy in internal SRAM (vid.colormap -> heap_caps_malloc INTERNAL)
+- **25.88 fps (+0.9%)** for ~16.6 KB of internal RAM. Not a strong win; internal RAM is
+  needed for banding. Reverted.
+
+### Internal RAM audit before banding
+- `idf.py size-components`: libquakegeneric uses 197 KB of internal .bss. Largest internal
+  symbols: ledges 38 KB, lsurfs 29 KB, cl_static_entities 23.5 KB, basespans 19 KB,
+  dma_buffer (audio, main/audio.c) 16 KB, cl_temp_entities 11.8 KB, cl_efrags 10 KB.
+
+### Experiment: cl_static_entities, cl_temp_entities, cl_efrags and audio dma_buffer -> PSRAM
+- EXT_RAM_BSS_ATTR on all four (~61 KB). An upstream comment said keeping the cl_ tables
+  internal was worth 0.5 fps in an older build.
+- **25.62 fps (vs 25.64: no change)**. Free internal RAM 59 KB -> 121 KB (largest block
+  45 KB). Kept, to make room for band buffers.
+
+## 2026-10-24 — Step 2: banded rendering (world, models and particles per band in SRAM)
+
+### Design (components/quakegeneric/quakegeneric/source/r_band.c)
+- R_ScanEdges already walks rows top to bottom. At the last row of each band it flushes the
+  spans (D_DrawSurfaces), then R_BandFinish draws entities, view model and particles for the
+  band and copies the band's pixels to the real framebuffer. Band framebuffer and z-buffer
+  are static arrays in internal SRAM; d_viewbuffer/d_pzbuffer are biased by the band's top
+  row and zspantable is updated, so all existing drawing code works unchanged. The z-buffer
+  never touches PSRAM.
+- Clipping: alias models via r_refdef.aliasvrect; particles and sprite spans check the band
+  rows; before the last band, R_DrawParticles only draws (the last band also runs physics).
+  World state (modelorg, r_entorigin, currententity) is saved and restored around the
+  per-band entity pass, since D_DrawSurfaces depends on it.
+- Bugs found on the way: (1) crash (Load access fault in xTaskGenericNotify; draw_task_handle
+  overwritten): models that R_AliasCheckBBox "trivially accepts" (fully on screen) skip
+  aliasvrect clipping and wrote rows outside the band. Fixed by disabling trivial accept in
+  banded frames. (2) With 48-row bands plus the profiler, USB HID enumeration of the gaming
+  keyboard/mouse failed with ESP_ERR_NO_MEM (internal RAM), aborting; the board then sat in
+  the GDB stub and needed a JTAG reset (openocd -f board/esp32p4-builtin.cfg -c "init; reset
+  run; shutdown") before it could be flashed again.
+
+### Results (current best without bands: 25.62 fps)
+- 48-row bands (6 bands, 72 KB SRAM): **24.57 fps (-4%)**.
+- 32-row bands (9 bands, 48 KB SRAM): **22.73 fps (-11%)**. Profile: D_DrawZSpans fell from
+  ~10% to 4%, but per-band repeats of model work appeared: R_AliasPreparePoints 6.4%,
+  memcpy (band copy-out) 3.6%, D_DrawParticle 2.0%, RecursiveLightPoint 1.5%, sin/cos.
+- 32-row bands + per-band model culling (R_AliasCheckBBox rejects models whose projected
+  bbox doesn't touch the band; view model too): **24.23 fps (-5.4%)**.
+  R_AliasPreparePoints 2.4%. Remaining costs: memcpy 4.0%, D_DrawParticle 2.4%, extra
+  span flushes; core 0 now idles 4.1% (esp_cpu_wait_for_intr) waiting for the display.
+
+### Conclusion
+- Banding works but nets negative here. It only speeds up z/pixel writes (~5% of the frame);
+  the dominant costs, D_DrawSpans8 (~24%) and surface-cache building (~13%), read textures
+  from PSRAM and are untouched. Even removing all band overheads would leave only a few %
+  gain, for ~50-70 KB of internal RAM that USB also needs. Parked on branch
+  `banding-experiment` (commit below); main branch reverted to non-banded.
+
+## 2026-10-24 — Step 3: display pipeline
+
+### Experiment: RGB565 HDMI frame buffers, DSI bridge converts to RGB888
+- The LT8912B needs RGB888 over DSI, so the BSP forced RGB888 frame buffers (2.76 MB each,
+  166 MB/s of continuous scan-out from PSRAM, and 2.76 MB/frame of PPA writes). ESP-IDF's DPI
+  panel has separate in_color_format (frame buffer) and out_color_format (DSI). Patched the
+  vendored BSP's HDMI path to use RGB565 frame buffers with out_color_format RGB888 (removed
+  its `#error`), set CONFIG_BSP_LCD_COLOR_FORMAT_RGB565, and made display.c follow the
+  configured format (PPA outputs RGB565, no colour conversion).
+- **35.73 fps (+39% vs 25.62)**. PPA 22.2 -> 11.1 ms/frame, palette convert 8.5 -> 6.2 ms;
+  game waits 0.02 ms/frame for the display. PSRAM bandwidth was the shared bottleneck.
+- Picture correctness (colours, stability) not yet confirmed on the monitor.
+
+- **Correction: invalid result.** The user reported the HDMI screen was solid blue (audio
+  still working). On chips before rev v3.0 the DSI bridge cannot convert RGB565 to RGB888:
+  in hal/esp32p4/include/hal/mipi_dsi_brg_ll.h (the `CHIP_SUPPORT_MIN_REV < 300` branch),
+  set_output_color_format writes the same `raw_type` field as set_input_color_format, so the
+  bridge read the RGB565 buffers as RGB888. The 35.73 fps is therefore not valid (scan-out
+  was not the intended stream). Reverted (RGB888 frame buffers again).
+- Checked alternative: YUV422 frame buffers (16 bpp; on rev < 3 the bridge's YUV input uses
+  a separate field, `data_in_type`, so YUV422 -> RGB888 conversion would work). But the PPA
+  can't produce YUV422 on this chip: hal/esp32p4/include/hal/ppa_ll.h says "YUV422 not
+  supported by PPA SRM hardware before P4 ECO5". Not pursued.
+
+### Experiment: HDMI 1280x720 at 30 Hz (DPI pixel clock 80 -> 40 MHz, same timing)
+- New BSP option CONFIG_BSP_LCD_HDMI_HALF_REFRESH halved dpi_clock_freq_mhz (LT8912B follows
+  the incoming MIPI timing; its pclk_mhz is only used for its test pattern). 29.99 Hz,
+  22.2 kHz line rate (CEA 720p30 is 22.5 kHz).
+- **30.66 fps (+19% vs 25.74)**, PPA 22.2 -> 15.5 ms, convert 8.5 -> 7.2 ms. Confirms that
+  HDMI scan-out bandwidth (166 MB/s at RGB888 60 Hz) is a major cost for the game core.
+- But the user's monitor showed a **blank screen** (doesn't accept this timing). Reverted.
+
+### Experiment: HDMI 720x400@70 (VGA text mode timing), DPI clock from the APLL
+- Added a 720x400 mode to the vendored LT8912B/BSP: 28.322 MHz (APLL; the I2S audio clock is
+  XTAL on rev < 3 chips, so the APLL is free), 900x449 total, -H +V sync. Quake rendered
+  480x320 (scales 1.5x / 1.25x), vid.aspect set for a 4:3 display.
+- APLL locked at 28322012 Hz; LT8912B reported HDMI output enabled. **35.19 fps** (PPA 8.4 ms,
+  convert 6.5 ms) — but the user's monitor reported **no video input**. Unclear whether the
+  monitor rejects 720x400 or the APLL-clocked DPI path is at fault.
+- User decision: target **640x480@60** from now on and optimise for that. 720x400 removed.
+
+## 2026-10-25 — New target: 640x480@60, Quake rendered at 640x480 (no scaling)
+
+User decision: optimise for HDMI 640x480@60 with Quake rendering 640x480 natively.
+
+### Setup
+- Vendored LT8912B/BSP: new 640x480 mode. Pixel clock 160/6 = 26.667 MHz from PLL_F160M
+  (exact integer divider, no APLL); totals widened to 848x524 so the line rate (31.45 kHz)
+  and frame rate (60.01 Hz) match VGA; -H -V sync, VIC 1, 4:3. LT8912B detected V total
+  0x20c = 524 (with the 720x400 attempt it still reported 741, the 720p total — that mode's
+  DPI timing apparently never reached the bridge).
+- display.c: when Quake renders at the display resolution, core 1 converts the 8-bit frame
+  straight into the RGB888 frame buffer (4 pixels -> 3 aligned 32-bit stores via a 32-bit
+  palette); no RGB565 intermediate and no PPA. The PPA path remains for scaled modes.
+- quakegeneric.h: 640x480 render size for this mode; vid_null.c sets vid.aspect from the
+  displayed shape (1.0 here and for 512x288 at 16:9).
+
+### Baseline for the new target
+- **18.50 fps** at 640x480 (185 frames / 10 s). Core 1 convert 15.6 ms/frame; game never
+  waits for the display. Peak edges 598, surfaces 230.
+- Pixel throughput 5.7 Mpx/s vs 3.8 Mpx/s at 512x288 -> 720p (+50% per pixel), thanks to
+  ~55 MB/s scan-out instead of ~166 MB/s and no PPA traffic.
+
+### Profile at 640x480 (18.63 fps)
+- D_DrawSpans8 37.7%, R_DrawSurfaceBlock8_mip0 14.4%, D_DrawZSpans 12.2%,
+  D_PolysetDrawSpans8 5.3%, R_GenerateSpans 1.9%, R_DrawSurfaceBlock8_mip1 1.8%,
+  R_RecursiveWorldNode 1.6%, S_PaintChannels 1.5%. Pixel fill ~70% of core 0's time.
+- Core 1 (palette convert) busy 15.8 of ~53.7 ms per frame. 60 fps needs ~3.2x.
+- (A CRC-based render-correctness check was started but dropped at the user's request:
+  too heavy.)
+
+### Diagnostics at 640x480 (measurement-only builds, reverted right after)
+- World z writes disabled (D_DrawZSpans returns at once; models lose occlusion, the gun
+  vanished): **22.13 fps** vs 18.63 -> z-buffer writes cost ~8.5 ms/frame (~16%).
+- World span pixels written to an SRAM scratch row instead of the framebuffer:
+  **20.02 fps** -> framebuffer writes cost ~3.8 ms/frame (~7%).
+- So an all-SRAM tiled renderer could save at most ~23% of core 0's time; the rest of
+  D_DrawSpans8 (~30% of the frame) is texel fetch and arithmetic.
+
+### Experiment: 4 MB surface cache (-surfcachesize 4096; default ~1.33 MB at 640x480)
+- **18.64 fps (no change)**. The cache isn't thrashing; surfaces are rebuilt because their
+  lighting animates (lightstyles/dynamic lights). Reverted.
+
+### Experiment: colormap copy in internal SRAM, at 640x480
+- **18.70 fps (+0.3%, noise)**. Reverted.
+
+### Experiment: world z-buffer fill on core 1 (d_zjob.c)
+- At the start of each D_DrawSurfaces flush, core 0 queues one job per surface (span list +
+  the surface's 1/z gradients, from surf_t; background uses 0,0,-0.9) and wakes a worker task
+  on core 1 (priority 6: above the display conversion, below audio). Core 0 draws the
+  pixels, then waits for the worker before the span lists are reused, so models always
+  depth-test against a complete z-buffer. The job copy of D_DrawZSpans takes the gradients
+  as parameters (same arithmetic, same z values). Queue of 1024 jobs; overflow falls back to
+  the inline z pass. Handshake: worker notifies exactly once per start; only core 0 tracks
+  "started" (avoids a stale notification making a later wait return early).
+- **20.45 fps (+9.8% vs 18.63)**. Core 1 convert 17.4 ms (was 15.6; it now shares the core).
+  Internal RAM free 120 -> 100 KB (16 KB job queue + 4 KB task stack). Kept.
+
+### Experiment: textured world spans shared between both cores (d_jobs.c, replaces d_zjob.c)
+- Each D_DrawSurfaces flush now has two phases. Phase 1: core 0 builds surface caches and
+  gradients as before, but queues normal textured surfaces as "colour jobs" (span list +
+  cacheblock/cachewidth + all D_CalcGradients/z gradients) instead of drawing them; core 1
+  meanwhile does the z jobs. Phase 2: both cores draw colour jobs, claimed with an atomic
+  counter (__atomic_fetch_add; the core has the A extension). Sky, water and background
+  surfaces stay on core 0. D_DrawSpans8Job is D_DrawSpans8 with the gradients passed in
+  (same arithmetic). Colour job queue (1024 x ~80 B) in PSRAM.
+- Surface cache made 3x larger (PSRAM), since a block now has to survive until the end of
+  its flush rather than just until its spans are drawn.
+- First run **hung**: ulTaskNotifyTake(pdTRUE) clears the whole notification count, so when
+  both "start z" and "start colour" were pending the worker consumed both and then waited
+  forever. Fixed with pdFALSE (take one at a time).
+- **23.36 fps (+14% vs 20.45)**. Core 1 is now close to saturated: palette convert takes
+  26.9 ms of wall time (preempted by the job worker); the game waits 0.37 ms/frame for it.
+
+### Diagnostic: palette conversion skipped on core 1 (screen frozen for that run)
+- **28.25 fps (+21% vs 23.36)**: core 1's 15.6 ms/frame RGB888 conversion is now the main
+  limiter of the shared span drawing. Worth moving off the CPU (PPA blend unit has CLUT/L8
+  hardware on hw_ver1; IDF's driver has it commented out, register value 4 for L8) or
+  making much cheaper.
+
+### Experiment: palette conversion reading 32-bit source words, 8 pixels per iteration
+- **23.37 fps (no change)**; convert time unchanged. The loop is memory-bound. Reverted.
+
+### Experiment: palette conversion in the PPA blending engine (L8 + CLUT), with self-test
+- The PPA blender has CLUT hardware on hw_ver1; ESP-IDF 5.5's driver has L8 commented out.
+  Copied esp_driver_ppa into components/ (overrides IDF's; needs `idf.py reconfigure` the
+  first time) and patched it: allow L8 as the background colour mode (register value 4),
+  plus ppa_blend_set_bg_clut() to load the 256-entry ARGB palette (CLUT RAM at PPA base +
+  0x400 in memory-access mode).
+- display.c: blend with bg = the 8-bit frame as L8, fg = same buffer as A8 with alpha fixed
+  at 0, out = RGB888 into the LCD frame buffer. The palette is snapshotted and the CLUT
+  reloaded only when the palette changed.
+- Startup self-test converts a test pattern with the PPA and compares it with the CPU
+  conversion (±1 per channel allowed); on any mismatch it falls back to the CPU. Result:
+  **0 bad bytes** (bit-exact), "Palette conversion: PPA (hardware CLUT)".
+- **26.46 fps (+13% vs 23.36)**. Conversion now 7.4 ms in hardware; core 1 is free for
+  span jobs meanwhile.
+
+### Profile after PPA conversion (26.45 fps), core 0
+- D_DrawColorJobs (core 0's share of span drawing) 34.4%, R_DrawSurfaceBlock8_mip0 17.1% +
+  mip1 2.2% (surface-cache building, core 0 only), D_PolysetDrawSpans8 7.1%,
+  D_PolysetScanLeftEdge 2.2%, R_GenerateSpans 2.0%, R_RecursiveWorldNode 2.0%, idle 2.3%.
+
+### Experiment: colour jobs published progressively (core 1 starts drawing during the walk)
+- Instead of two phases, each colour job is published (atomic release store of the count)
+  as soon as its surface cache and gradients are ready; core 1 draws them after its z jobs
+  while core 0 keeps building surface caches. Core 0 closes the queue at the end and helps.
+  Waiting for an unpublished job is a spin on an internal variable.
+- **27.14 fps (+2.6% vs 26.46)**. Kept.
+
+### Experiment: surface-cache building on core 1 only (D_CacheSurfaceDeferred + build jobs)
+- Core 0's walk only looks up/allocates the cache block and computes gradients; core 1
+  draws the block (R_DrawSurface) before marking the colour job ready.
+- **26.98 fps (vs 27.14: no gain)**: core 1 became the bottleneck (builds serialised there).
+
+### Experiment: surface building on both cores (r_surf_c1.c)
+- r_surf.c compiled a second time with every global/function renamed (_c1) gives core 1 an
+  independent R_DrawSurface; core 0 builds a block itself (with the original copy) when core
+  1 has >= 2 builds pending, and publishes that job as already built.
+- **27.67 fps (+2.0% vs 27.14)**. Kept. Need per-core utilisation to see the new balance.
+
+### Tool: core-1 PC sampling (CONFIG_QUAKE_PROFILE_CORE1)
+- A second gptimer ISR on core 0 samples core 1's PC (PROF1 lines; profile_report.py --core 1).
+- First attempt gave a garbage core-0 profile: both sampling ISRs ran at exactly 2 kHz, so
+  each always caught the other core inside its own sampling ISR. Fixed by giving the core-1
+  timer a period 37 us longer.
+- At 27.3 fps: core 1 idle ~42%, and spinning in the build loop while core 0 walked.
+
+### Experiment: core 1 does z first, then interleaves in-order builds with colour jobs
+- **26.28 fps (worse)**: core 0 saw a build backlog, built more itself, then spun 11% in
+  D_JobsFinish waiting for core 1's in-order builds. Replaced.
+
+### Experiment: independent jobs (build + draw, either core, any order)
+- Each colour job builds its block with the claiming core's own copy of the surface code,
+  then draws. No ordering. **27.60 fps** (profiling build); core 1 still idle 44%: every
+  flush was synchronous, so core 1 had nothing to do while core 0 scanned between flushes.
+
+### Experiment: pipelined job queue across the frame
+- One job queue per frame; every surface of every flush becomes a job (textured: build +
+  colour + z; sky/water/background: drawn by core 0, z-only job). R_ScanEdges alternates
+  between two span buffers and only waits (helping meanwhile) for the jobs of the flush that
+  last used the buffer it switches to; D_JobsEndFrame completes everything before the
+  entity pass. Core 1 sleeps when the queue is empty (lost-wakeup-safe notification; frame
+  generation counter so stale notifications can't start a frame), instead of spinning and
+  starving the display task.
+- **28.84 fps** (profiling build; +4.5% vs 27.60). Core 1: colour 32%, builds 13%, z 11%,
+  idle 39%. Core 0's remaining serial work (models, edges, game logic, HUD) is now what
+  leaves core 1 idle.
+
+- Without profiling: **29.03 fps** (from 18.6 at the start of the 640x480 work: +56%).
+
+
+### Experiment: sparse world z-buffer fill (r_zrows.c)
+- The world z-buffer is only read by alias models (including cl.viewent), sprites and
+  particles drawn after the world pass. Before R_EdgeDrawing, R_ComputeZRows computes per-row
+  [d_zrowmin[v], d_zrowmax[v]] ranges from each alias model's Z-clipped frame bounding box
+  (8 corners + 12 edges clipped at ALIAS_Z_CLIP_PLANE, so cl.viewent at r_origin gets its
+  tight screen box instead of triggering a full-screen fallback), sprite spheres and live
+  particle squares. D_DrawZSpansJob and D_DrawZSpans clip spans to [d_zrowmin[v], d_zrowmax[v]]
+  and advance izi by skip * izistep for bit-exact z values inside the range.
+- **32.46 fps (+11.8% vs 29.03)** (325 frames / 10.01 s). Kept.
+
+### Experiment: local restrict variables and 32-bit loads/stores in R_DrawSurfaceBlock8_mip0..3
+- Cached vid.colormap and step globals in locals and packed 4 pixels per 32-bit load/store in
+  r_surf.c (and r_surf_c1.c).
+- **32.49 fps (+0.1% vs 32.46, noise)**. With z-spans now sparse, core 1 has even more idle
+  headroom during R_ScanEdges and already absorbs surface builds without stalling core 0.
+  Reverted.
+
+### Experiment: branchless 8-pixel loop, pipelined fdiv.s and paired loads in D_DrawSpans8Job
+- Disassembly of D_DrawSpans8Job showed that sharing the inner loop between 8-pixel blocks
+  and the tail caused GCC -O3 to unroll 8 iterations with 7 conditional exit branches inside
+  every 8-pixel block (tying up s1..s7 with constants 1..6), while fdiv.s (z = 0x10000 / zi)
+  stalled on the immediately following fmul.s, and each lbu was immediately followed by sb.
+- Split the full 8-pixel loop (count > 8) from the tail (#pragma GCC unroll 0), issued the
+  next block's fdiv.s via inline assembly before the 8 integer texel fetches so division runs
+  in parallel in the FPU, paired texel loads (p0/p1, p2/p3, p4/p5, p6/p7) to hide load-use
+  latency, and skipped fdiv.s/snext/tnext when the remaining tail is 1 pixel.
+- **34.52 fps (+6.3% vs 32.46)** (346 frames / 10.02 s). Kept.
+## 2026-10-25 — (continued after a session break; state at HEAD 81ceb7f re-measured 34.54 fps)
+
+### Profile at 34.3 fps (both cores)
+- Core 0: D_DrawSpans8Job 24.4%, R_DrawSurfaceBlock8_mip0 10.5% (+mip1 1.4%), D_PolysetDrawSpans8
+  9.0%, R_GenerateSpans 3.5%, D_DrawZSpansJob 3.3%, R_LeadingEdge 2.8%, D_PolysetScanLeftEdge
+  2.7%, R_RecursiveWorldNode 2.4%, idle 2.1%, CL_RelinkEntities 2.0%, Draw_ConsoleBackground
+  1.7%, S_PaintChannels 1.6%.
+- Core 1: idle 45.5%, D_DrawSpans8Job 31.9%, R_DrawSurfaceBlock8_mip0_c1 12.6%, z 3.7%.
+
+### Experiment: 4 span buffers (in PSRAM) instead of 2 (in SRAM)
+- So core 0 can scan further ahead of the job queue. **34.08 fps (no gain)**; buffer-switch
+  waits aren't the limiter. Reverted.
+
+### Experiment: core 0 only helps with jobs inside the range it waits for (D_JobsWaitRange)
+- Idea: when switching span buffers core 0 was claiming fresh jobs, stealing work core 1
+  would do. **34.35 fps (no gain)**. Reverted.
+
+### Checked against an AI-written list of ideas supplied by the user
+- "Aliasing reloads in R_DrawSurfaceBlock8 (restrict locals + 32-bit stores)": already
+  tried, +0.1% (noise), reverted (see above). Same idea for D_PolysetDrawSpans8 not yet tried.
+- "Branch bloat / fdiv.s stalls in D_DrawSpans8Job": already done (commit 81ceb7f, +6.3%).
+- "Offload Turbulent8 / D_DrawSkyScans8 / D_DrawSolidSurface to jobs": none of them is in
+  either core's top 25 (<0.7% each). Little to gain.
+- "Parallel alias rasterisation": agreed, ~15% of core 0, the largest serial chunk left.
+
+### Experiment: hottest loops in the 8 KB TCM (SPM_IRAM_ATTR)
+- D_RunJob (span + z loops inlined, 1800 B), R_DrawSurfaceBlock8_mip0/mip1 (+_c1 copies),
+  D_PolysetDrawSpans8, R_LeadingEdge, R_GenerateSpans, R_StepActiveU: ~5.2 KB of 8 KB.
+- Ran fine on both cores, but **27.35 fps (-21% vs 34.54)**. Executing from TCM is slower
+  than from PSRAM via the L1 instruction cache (hot loops already hit the I-cache), possibly
+  also contended between the two cores. Reverted.
+
+### Experiment: local copies of globals in D_PolysetDrawSpans8 (alias model spans)
+- acolormap, r_zistepx, r_lstepx, a_*step*, skinwidth copied to locals (byte stores could
+  alias them, forcing reloads every pixel). Bit-exact.
+- **35.06 fps (+1.5% vs 34.54)**. Kept.
+
+### Experiment: alias span packages (D_PolysetDraw's spans[]) back in internal SRAM
+- **35.02 fps (no gain)** for 33 KB of internal RAM. Reverted (stays in PSRAM).
+
+### Experiment: hardware cache prefetch (autoload) for PSRAM
+- At boot, L1 D, L2 and L1 I autoload were all **disabled** (cache_ll_*_is_*_autoload_enabled
+  printed 0). The ROM has Cache_Config/Enable_{L1_DCache,L2_Cache}_Autoload (4 regions each,
+  miss/hit/both trigger, step direction); its header says not to call them from SDK apps,
+  but they are in this chip's ROM table. Prefetched lines are clean, so DMA buffers stay
+  correct as long as drivers write back/invalidate around transfers (they do).
+- L2 autoload over all of PSRAM (0x48000000-0x4c000000), miss trigger, positive order:
+  **36.53 fps (+4.2% vs 35.06)**.
+- Plus L1 D-cache autoload with the same region: **35.95 fps** (worse than L2 alone; likely
+  pollutes the L1). Dropped.
+- L2 only, trigger on miss and hit: **36.74 fps (+4.8% vs 35.06)**. Kept.
+
+### Experiment: L1 I-cache autoload (both cores) on top of L2 autoload
+- **36.53 fps (no gain vs 36.74)**. Reverted.
+
+### Observed: occasional hang (not yet diagnosed)
+- The user saw the board hang (picture frozen). A 4-minute serial capture of the current build
+  reproduced it shortly after demo2 started: Fps lines simply stop, no panic or reboot.
+  JTAG attach (OpenOCD) and opening the serial port both reset the chip, so the hung state
+  couldn't be inspected. Suspects: the job system's cross-core waits, the PPA blend never
+  completing (display task holding the frame mutex), or cache autoload. The user asked to
+  set this aside and focus on performance for now.
+
+### Experiment: 16-pixel perspective subdivision in the span jobs (was 8)
+- One perspective-correct division per 16 pixels instead of 8, as the original DOS/Win Quake
+  did by default (d_subdiv16 with the asm D_DrawSpans16). Slightly different texel mapping
+  from the 8-pixel C path, same as the original game's look.
+- **37.77 fps (+2.8% vs 36.74)**. Kept.
+
+### Statistics: surface-cache builds (new BENCH line)
+- Per frame in the 10 s window: **33.9 builds, 222k texels, 31.0 of them because a dynamic
+  light touches the surface** (dlit surfaces are rebuilt every frame in Quake's renderer).
+
+### Diagnostic: surface-cache build stores (R_DrawSurfaceBlock8_mip0) to an SRAM scratch row
+- **41.09 fps (+8.6% vs 37.83)**: the builds' PSRAM writes (write-allocate) are a large cost.
+
+### Experiment: build surface-cache blocks in 16-row bands in SRAM, then memcpy each band
+- R_DrawSurface reordered to draw one band of block rows (all columns) into a 4 KB SRAM band
+  buffer (per core copy) and copy the band (contiguous in the cache block) to PSRAM.
+- **37.69 fps (no gain vs 37.83)**: contiguous CPU stores into PSRAM cost the same as the
+  scattered ones, so the cost is the PSRAM write traffic itself (likely write-allocate line
+  fills), not the store pattern. A DMA copy (esp_async_memcpy, no line fills, async) could
+  avoid it but needs careful cache invalidation; upper bound ~8%. Not pursued for now.
+  Reverted.
+
+### Experiment: alias models drawn by both cores, each clipped to half the screen
+- r_alias.c, d_polyse.c and r_aclip.c are compiled a second time (r_alias_c1.c,
+  d_polyse_c1.c, r_aclip_c1.c) with every global/function renamed by alias_c1_names.h,
+  including the shared state they write (currententity, modelorg, r_refdef, the rasteriser
+  error terms) and Mod_Extradata (core 1 gets a read-only version; core 0 loads every model
+  in a prepass so the cache LRU is only touched by core 0). entity_t.trivial_accept became a
+  per-copy static. R_DrawEntitiesAndViewModel (r_main.c) culls, lights (R_LightPoint isn't
+  thread-safe) and loads the alias models + view model on core 0, then both cores draw the
+  list clipped via r_refdef.aliasvrect; models wholly in the other half are rejected in
+  R_AliasCheckBBox. Sprites are drawn by core 0 afterwards.
+- First run: **crash** on core 1 (Load access fault in R_AliasPrepareUnclippedPoints_c1).
+  R_AliasC1Wait used a bare task notification, but the game task also receives notifications
+  from the d_jobs worker; a stale one let core 0 clear r_alias_split while core 1 was still
+  drawing, so core 1 took the unclipped path. Fixed with an explicit done flag. (The panic
+  left the board in the GDB stub; recovered with an OpenOCD JTAG reset.)
+- Top/bottom split: **37.45 fps (no gain vs 37.83)**: the view model (the biggest model)
+  sits low on the screen, so core 1 got almost all its pixels.
+- Left/right split: **38.76 fps (+2.5%)**. Kept. Possible sub-pixel seam where models are
+  clipped at the centre line (same clipping as at screen edges); not visible in the log.
+
+## 2026-10-25 — Stability: two concurrency bugs fixed, cache autoload removed
+
+The multi-core work had introduced crashes/hangs (the user saw a hang). Found with 4-minute
+runs through all three demos (diagnostic runs, not benchmarks) plus temporary debug code
+(frame-buffer guard zones, surface-cache list validation at phase checkpoints, and a hang
+reporter printing both cores' PCs, task states and job-queue state; all removed again).
+
+### Bug 1: surface-cache block freed while a queued job still used it (crash)
+- Repeated crash in D_SCAlloc (`*sc_rover->owner = NULL`, owner = 0x13020202: four 8-bit
+  pixels) in demo3. Guard zones after the frame/z buffers stayed intact; validating the
+  surface cache's block list showed the first damaged header right after the world pass.
+- Cause: a dynamically lit surface reuses its existing cache block and queues a rebuild job.
+  Later in the same frame core 0 allocates a block for another surface; if the allocator's
+  rover reaches that existing block, it frees it and writes a new block header into it; the
+  pending rebuild then writes texels over that header. (The original renderer built each
+  surface immediately, so blocks used earlier in a frame were never still in use.)
+- Fix: surfcache_t.usedframe is stamped when D_CacheSurfaceDeferred returns a block; before
+  D_SCAlloc frees a block used this frame, it waits (helping) for all queued jobs
+  (D_JobsWaitAll).
+
+### Bug 2: deadlock in D_JobsWaitRange (hang)
+- The first version of bug 1's fix hung after ~1 minute. The hang reporter showed the game
+  task runnable (spinning), the worker asleep, all published jobs claimed, queue open.
+- Cause: core 1 can claim a job index before core 0 publishes it and then sleep; core 0 only
+  wakes it at the end of a flush. Waiting for that job from inside the flush (the allocator
+  wait) spun forever. Fix: D_JobsWaitRange wakes the worker before waiting.
+
+### Cache autoload removed
+- With the two bugs fixed and autoload off: 4 minutes, all three demos, no faults.
+- Whole-PSRAM L2 autoload: crash within seconds after a level load (load fault in
+  R_DrawSurface). Likely prefetched lines of level data that the SD card's DMA was still
+  writing stay stale after the driver's invalidate. It was probably also behind the user's
+  original hang.
+- Autoload restricted to CPU-only buffers (surface cache, z/frame buffers): +~2%, but one
+  unexplained reboot in demo3; adding code/rodata/PSRAM .bss: Instruction access fault in
+  demo3. The ROM header says not to call these functions from applications; on this chip it
+  isn't safe. Removed entirely.
+- Clean build (fixes, no autoload, no debug code): **37.05 fps**, stable for 4 minutes.
+
+### Profile at the stable 36.7 fps (both cores)
+- Core 0: D_DrawSpans8Job 22.8%, R_DrawSurfaceBlock8_mip0 10.4%, idle 5.0%, D_PolysetDrawSpans8
+  3.9%, D_DrawZSpansJob 3.5%, R_GenerateSpans 3.5%, R_LeadingEdge 2.7%, R_RecursiveWorldNode
+  2.7%, memcpy 2.1%, CL_RelinkEntities 2.0%, Draw_ConsoleBackground 1.8% (console sliding up
+  during the first seconds of the window), FreeRTOS critical sections ~2.5%.
+- Core 1: D_DrawSpans8Job 31.6%, idle 31.3%, R_DrawSurfaceBlock8_mip0_c1 12.8%, alias ~10%.
+
+### Experiment: issue 8 texel loads before any store in the span loop (memory-level parallelism)
+- **36.83 fps (no gain)**: the cache doesn't overlap misses. Reverted.
+
+### Experiment: FreeRTOS tick 1000 Hz (was 100)
+- **36.79 fps (no gain)**. Reverted.
+
+### Experiment: adaptive left/right split column for the alias pass
+- Split column moved each frame towards equal drawing times on both cores.
+- **37.33 fps (+0.8%, too small)**. Reverted.
+
+### Experiment: reuse dynamically lit surface-cache blocks when their lights are unchanged
+- Quake rebuilds every dynamically lit surface every frame. Each cache block now keeps a hash
+  of the dynamic lights it was built with (index, origin, radius, minlight: everything
+  R_AddDynamicLights reads), and a lit block is reused if the same lights hit it again (plus
+  the usual texture/lightstyle checks). Same inputs, so the same texels: output unchanged.
+- Builds per frame 34.4 -> **16.9** (texels 226k -> 89k; dlight-caused 31.5 -> 14.1).
+- **39.38 fps (+6.3% vs 37.05)**. Kept.
+
+### Profile at 39.1 fps (both cores)
+- Core 0: D_DrawSpans8Job 25.3%, idle 5.6%, R_DrawSurfaceBlock8_mip0 5.0%, D_PolysetDrawSpans8
+  4.4%, R_GenerateSpans 4.0%, D_DrawZSpansJob 3.9%, R_LeadingEdge 3.4%, R_RecursiveWorldNode
+  3.1%, CL_RelinkEntities 2.3%, memcpy 2.1%, Draw_ConsoleBackground 1.8%, S_PaintChannels 1.7%,
+  __ieee754_sqrt 0.75%.
+- Core 1: D_DrawSpans8Job 34.4%, idle 34.3%, surface builds 7%, alias ~11%, z 4.9%.
+
+### Experiment: float versions of libm (sqrt/sin/cos/atan2/atan/floor/ceil/fabs/pow) + -fno-math-errno
+- mathlib.h maps them to sqrtf etc. for the whole engine (the double versions are software
+  routines on this single-precision FPU; -fno-math-errno lets sqrtf become fsqrt.s). Game and
+  client maths now run in single precision, which is what Quake's data is anyway.
+- **41.17 fps (+4.5% vs 39.38)**. Kept.
+
+### Profile at 40.9 fps (after float libm)
+- Core 0: D_DrawSpans8Job 26.7%, idle 5.9%, R_DrawSurfaceBlock8_mip0 5.3%, D_PolysetDrawSpans8
+  4.6%, R_GenerateSpans 4.4%, D_DrawZSpansJob 4.3%, R_LeadingEdge 3.5%, R_RecursiveWorldNode
+  3.3%, memcpy 2.3%, CL_RelinkEntities 2.3%. Core 1: spans 36.9%, idle 31.1%.
+
+### Diagnostics (wrong picture, not kept)
+- Span writes to a dummy SRAM line instead of the PSRAM framebuffer: **44.33 fps (+7.7%)**:
+  upper bound for anything that speeds up framebuffer writes.
+- Span texel reads from an 8 KB SRAM table instead of the surface cache: **43.30 fps
+  (+5.7%)**. (A first try with a 32 KB static table ran at 20 fps; probably it pushed some
+  internal allocation into PSRAM. Ignored.) So the span loop is mostly instruction-bound:
+  ~9 instructions per pixel (srai, srai, mul, add, add, lbu, sb, 2x add).
+- Core-0 phase timing (Sys_FloatTime around phases, ms/frame, 300-frame block in demo1):
+  host before rendering 1.1, R_SetupFrame..R_ComputeZRows 0.85, world (R_EdgeDrawing) 19.0,
+  entities 5.8, particles 1.0, 2D+VID_Update ~0.6, sound 0.4.
+- Core-1 idle by core-0 phase (profiler samples on core 1 tagged with core 0's phase):
+
+  | core 0 phase | share of time | core 1 idle in it |
+  |---|---|---|
+  | outside R_RenderView (host, client, 2D, sound) | 12.1% | 82% |
+  | R_RenderWorld (BSP walk, edge emission) | 10.6% | 97% |
+  | R_ScanEdges (spans published as they're made) | 39.3% | 4% |
+  | D_JobsEndFrame (drain the queue) | 15.9% | 14% |
+  | entities (alias split L/R) | 17.9% | 17% |
+  | particles + R_SetupFrame etc. | 4.3% | 95% |
+
+  Core 1 idles almost entirely while core 0 does serial work (~27% of the frame). Perfect
+  balance of the current total work would give ~50 fps; 60 needs both less work and that.
+
+### Experiment: entity_t.model/msgtime moved next to forcelink (one cache line for the
+### per-slot scan in CL_RelinkEntities)
+- **41.46 fps (+0.7%, noise level)**. Reverted.
+
+### Tool: screenshots over the console (CONFIG_QUAKE_SCREENSHOTS=N)
+- After the benchmark window, every 100th presented frame is printed as hex SHOT lines
+  (8-bit pixels + palette); tools/screenshots.py writes PNGs. Lets me check the picture for
+  render-order changes without the user's monitor (screenshots only after the measured window,
+  so benchmarks are unaffected). Reference shots at 41.2 fps look right (world, monsters,
+  view model, status bar).
+
+## 2026-10-25 — Frame pipelining: core 1 finishes frame N while core 0 starts N+1
+
+### Upper bounds first (diagnostics)
+- No alias models or particles drawn at all: **50.59 fps** (vs 41.17). Without the view model
+  only: 43.46 fps. So models + particles cost ~4.6 ms of wall time per frame, and core 1 was
+  idle during ~27% of the frame (host work, BSP walk; see the phase table above).
+
+### Design (r_pipe.c, view_c1_names.h, d_part_c1.c; draw.c split into record/execute)
+- After the world of frame N is done (D_JobsEndFrame), core 0 no longer draws the models,
+  particles and 2D itself: it records them and hands the record to core 1 at VID_Update, then
+  goes on with frame N+1 (game, client, BSP walk, edges, spans with the job queue). Core 1
+  (the job worker task) draws the record: all alias models (the existing core-1 copy of the
+  alias code), particles (new core-1 copy of d_part.c), the recorded 2D calls, the palette,
+  and calls QG_DrawFrame.
+- Recorded: alias items with entity snapshots (lighting is computed by core 0 in the prepass
+  as before), particle positions and colours, Draw_* calls (translation tables copied,
+  Draw_CachePic done at record time), the palette. The core-1 drawing code reads its own
+  copy of the view state (view_c1_names.h renames r_origin, vpn, xcenter, d_viewbuffer,
+  d_pzbuffer, zspantable, ... in the core-1 compiles), captured when the frame is recorded.
+- Buffers: 3 frame buffers (core 1 finishing, core 0 rendering, display showing) and 2
+  z-buffers alternating per frame (vid.numpages = 3, so the status bar's incremental redraw
+  still works).
+- Memory core 1 reads but doesn't own (model data, pics) lives in the cache/hunk: every
+  Cache_Alloc/Free/Flush and Hunk alloc/free waits for the pending frame (R_PipeSync), as
+  do CL_ClearState and immediate palette changes.
+- Frames that can't be deferred (underwater warp; sprites, which only core 0 can draw) wait
+  for the pending frame and draw models/particles on core 0 as before (split L/R with core 1);
+  their 2D and present are still recorded. In demo1's first 10 s, 361 of 432 frames deferred.
+- Bug found on the way: the view model skips the bbox test in R_DrawAliasItems and inherited
+  the previous model's static alias_trivial_accept; if that was 1, the gun was projected
+  without clipping (huge coordinates: store fault, or core 1 rasterising forever). The split
+  path forced it to 0, hiding it. Now always 0 for the view model, as in the original.
+- Quake's hunk reduced from 20 MB to 16 MB: the profiling build (2 MB of sample buffers) ran
+  out of PSRAM for the surface cache with the new buffers.
+- Tooling: bench.sh now resets the board over JTAG and retries when flashing fails (the
+  board sits in the panic handler after a crash).
+
+### Result
+- **43.17-43.26 fps (+5% vs 41.17)**. Screenshots look right (models, particles, view model,
+  status bar). 4-minute run through all three demos: no faults.
+- Profile: core 0 idle 3.6% (was 5.9%), core 1 idle 14.1% (was 31%). The cores are now
+  fairly balanced; the frame costs ~42.5 ms of core time, 60 fps needs 33.4 ms. Core 1's alias
+  span drawing (D_PolysetDrawSpans8_c1) is 14.1% of its time; Draw_ConsoleBackground +
+  Draw_Character (console scrolling up at the start of the demo) 3.9%.
+
+### Diagnostic: who calls memcpy on core 0 (2.6% of its time)
+- Linker --wrap=memcpy (IRAM wrapper; a flash one crashed at boot) counting bytes per caller.
+  Result: 34.8 KB/frame, 543 calls/frame from R_DrawRect, i.e. Draw_TileClear: while the
+  console scrolls up at the start of the demo, SCR_SetUpToDrawConsole tile-clears everything
+  below it every frame, and the 3D view and status bar then overwrite it all.
+
+### Experiment: don't tile-clear under the 3D view / status bar while the console scrolls
+- SCR_TileClearOutsideView: skip the rows the 3D view covers (if it's drawn this frame and
+  spans the full width), and the status bar rows (Sbar_Changed redraws them in full).
+  memcpy from R_DrawRect 34.8 -> 3.9 KB/frame. **43.87 fps (+1.6% vs 43.17)**. Kept.
+- (Only affects frames with the console moving; in the benchmark window that is the start.)
+
+### Experiment: Draw_ConsoleBackground fast path for exactly 2x (640 wide), word stores
+- Same pixels as the generic 16.16 stepping loop (fstep = 0.5). **44.10 fps (+0.5%)**. Kept
+  (it's on core 1 now, which still has some slack).
+
+### Experiment: colormap (16 KB) copied to internal SRAM
+- **44.35 fps (+0.6%, noise level)** for 16 KB of internal RAM. Reverted.
+
+### Diagnostic: no world z-fill in the view model's box (gun z-tests against stale z)
+- **46.47 fps (+5.4% vs 44.10)**: the z-fill for the gun's box (it's large: ~240-430 x 155
+  pixels) is a big cost.
+
+### Experiment: gun drawn in front of the world (GLQuake semantics), z cleared in its box
+- The view model's box no longer goes into the z rows; before drawing it, the core that draws
+  it zeroes the z-buffer in the box except where the world's z was filled for other models,
+  sprites or particles, so the gun only depth-tests against itself. Picture correct.
+- **44.59 fps (+1.1%)**: zeroing the box costs nearly as much as the world z-fill did. Both
+  are dominated by PSRAM write traffic (write-allocate line fills), not by computation.
+  Too small for a change of behaviour. Reverted.
+- Takeaway: PSRAM writes cost ~1 ms per ~130 KB here. The big writers per frame: 8-bit
+  frame buffer (300 KB), world z-fill (zrows regions), surface-cache builds (~87 KB).
+
+### Experiment: asynchronous L2 preload of the frame-buffer rows ahead of the edge scan
+- Cache_Start_L2_Cache_Preload for the next 8 (or 32) rows of the frame buffer as R_ScanEdges
+  reaches them, so span writes would hit L2 instead of filling lines from PSRAM.
+- **43.58 fps (8 rows), 43.08 fps (32 rows) vs 44.10: slower.** The preloads compete with the
+  other PSRAM traffic (and perhaps evict useful lines). Reverted.
+
+### Found: the display task was starved by the job worker on core 1
+- BENCH now also prints how many frames the display task converted (all of them: 443 for
+  442 rendered, so none were dropped).
+- The draw task (PPA palette conversion) ran at priority 3 on core 1, below the job worker
+  (6), which is now busy most of the time: the "palette convert 17.96 ms" included waiting
+  to be scheduled. Draw task priority 8 (it mostly waits for the PPA):
+  **45.23 fps (+2.6% vs 44.09), conversion 6.53 ms per frame**, lower display latency.
+- The USB HID task and the CD music task (priority 4, core 1) were starved the same way
+  (input latency, possible music dropouts). Both block on events/ring buffers; raised to 7.
+  45.25 fps.
+
+### Experiment: span tail steps via a float reciprocal table instead of two integer divisions
+- **45.36 fps (+0.2%, noise)**: the divisions aren't a significant cost. Reverted.
+
+### Experiment: view model with its own generation-tagged z-buffer, drawn in front of everything
+- The gun's box is no longer z-filled by the world. The gun is drawn last (after the other
+  models, particles and sprites; GLQuake semantics) and depth-tests only against itself, in
+  a separate 32-bit z-buffer: entry = generation << 16 | z, a new generation per gun draw, so
+  entries from earlier frames always compare as farther and the buffer is never cleared
+  (except on wrap, every 65535 frames). Only gun pixels touch it. 1.2 MB PSRAM.
+- Screenshots: gun, models and particles correct. 4 minutes through all demos: no faults.
+- **46.49 fps (+2.7% vs 45.25)**. Kept.
+
+### Experiment: surface block builders (mip0/mip1) with locals and 32-bit stores
+- **46.62 fps (+0.3%, noise)**. The compiler was already doing fine. Reverted.
+
+## 2026-10-25 — Banded world drawing with DMA copy-out (the tile/band renderer, take 2)
+
+### Diagnostics first
+- Span loop statistics (cycle counter around D_DrawSpans8Job): ~140k pixels per core per
+  frame, ~65 pixels per span (most spans >= 64), **22 cycles per pixel** for ~12 instructions:
+  memory stalls dominate, not per-span overhead.
+- Span writes to a dummy SRAM line (upper bound for frame-buffer writes): **50.30 fps vs
+  46.49 (+8.2%)**.
+
+### Design (r_edge.c, main/bandcopy.c)
+- The world is drawn into one of two 16-row band buffers in internal RAM (2 x 10 KB);
+  d_viewbuffer points into the band, biased by its top row, so all span drawers (sky, water,
+  background on core 0, textured spans as jobs on both cores; each job remembers its
+  viewbuffer) work unchanged. R_ScanEdges flushes at the end of every band.
+- At the end of band k, band k-1's jobs are waited for (they had a band's time) and band k-1
+  is copied to the PSRAM frame buffer by GDMA. Band k+1 reuses k-1's buffer, so its copy is
+  only waited for at band k+1's first flush (a band's worth of scanning later). After the last
+  flush and D_JobsEndFrame, the last two bands are copied out (one copy at a time).
+- Frame buffers are 128-byte aligned; before each copy the destination rows are invalidated
+  in the cache (the driver doesn't) and the source written back.
+- First version used esp_async_memcpy: per-copy heap allocations (link lists, a stash
+  buffer) plus critical sections cost ~7% of core 0, and a scheduling bug made core 0 wait
+  for each copy right after starting it (QG_CopyWait 6.9%): 45.39 fps. Fixed schedule:
+  46.39. 32-row bands: out of internal RAM (USB host and the driver's stash allocations
+  failed). Then a lean direct GDMA driver (one AXI channel pair, link lists allocated once,
+  remounted per copy): **48.84 fps**. (Its first run timed out once per frame: the last two
+  copies were started back to back; now serialized.)
+- QG_CopyWait has a 20 ms timeout as a safety net (prints a message); never triggered.
+
+### Result
+- **48.84-48.89 fps (+5.1% vs 46.49)**. Screenshots correct (no seams). 4 minutes through all
+  demos: no faults, no copy timeouts. Internal RAM free 44.6 KB (largest block 31 KB).
+
+### Fix: span jobs could read a surface-cache block while another job was still building it
+- D_CacheSurfaceDeferred marks the block valid when it queues the build; a later flush in
+  the same frame (the surface continues in the next band, or after a span-buffer flush) got
+  needbuild = false and queued spans from the block, which the other core could draw while
+  the build job was still running: a frame of half-built texels. With 27 band flushes per
+  frame this got much more likely. Blocks now remember the job that builds them this frame;
+  later span jobs for the block (and the synchronous fallback) wait for that job first. It was
+  claimed earlier, so it is running or done: no deadlock.
+- 48.73 fps (no cost). 4 minutes through all demos: no faults.
+
+### Experiment: reuse a surface's first job of the frame in later band flushes
+- D_JobAddLike clones the job (block, gradients) instead of redoing cache lookup, mip level
+  and gradients per band (checking the block still belongs to the surface).
+- **48.79 fps (no gain vs 48.84)**. Reverted.
+
+### Diagnostic: how much time is spent waiting? (HP core counters mcycle / minstret)
+- The HP cores have mcycle, minstret, branch-mispredict, branch and store counters (no
+  memory-wait counter; only the LP core has one). On this in-order single-issue core, cycles
+  that retire no instruction are mostly memory waits (cache misses to PSRAM, plus L1 load-use
+  hazards), with some multiply/FP-divide latency; mispredicts are measured separately.
+  mcycle also counts while idle in WFI.
+- 10 s window at 48.5 fps:
+
+  | | cycles | instructions | IPC | non-retiring | mispredicts |
+  |---|---|---|---|---|---|
+  | core 0 | 3607 M | 1884 M | 0.52 | 48% (idle ~2%) | 20 M (~1.7% of cycles) |
+  | core 1 | 3609 M | 1815 M | 0.50 | 50% (idle ~16%) | 14 M |
+
+  | per function (both cores) | Mcycles/s | IPC | non-retiring |
+  |---|---|---|---|
+  | world spans (D_DrawSpans8Job) | 116 + 132 | 0.67-0.69 | 31-33% |
+  | surface builds | 26 + 30 | 0.64 | 36% |
+  | world z fill | 10 + 14 | 0.45 | 55% |
+  | alias models (core 1) | 84 | 0.54 | 46% |
+  | rest of core 0 (BSP, edges, game, sound), by subtraction | ~200 | ~0.44 | ~56% |
+
+- So roughly 44% of core 0's time and ~39% of core 1's busy time is spent waiting. The spans
+  (now writing to SRAM bands) are the least stall-bound; the serial core-0 code (BSP walk,
+  edge sorting, client) is the most: ~1.1 G stalled cycles per 10 s, ~31% of core 0. It walks
+  the world model (nodes, planes, msurfaces, edges, vertexes) in PSRAM.
+
+### Experiment: sprites drawn by core 1 too (every frame can now be deferred)
+- r_sprite.c and d_sprite.c compiled a second time for core 1 (sprite_c1_names.h): the sprite
+  code writes the d_* gradient globals the world code uses, reads view_clipplanes and the view
+  vectors, and calls TransformVector (which reads core 0's view vectors), so all of those get
+  core-1 copies; the view snapshot also carries view_clipplanes and xscaleinv/yscaleinv.
+  Sprite entities are recorded as snapshots and drawn after the alias models, before particles
+  and the gun (original order).
+- Before, frames with sprites (explosions etc.: ~16% of the window) waited for core 1 and drew
+  their models on core 0. Now 500 of 500 frames are deferred.
+- Forced screenshots of frames with sprites: explosion sprite correct, gun in front of it.
+  4 minutes through all demos: no faults.
+- **49.75-49.88 fps (+2.1% vs 48.84)**. Kept.
+
+### Experiment: core 1 culls and lights the alias models (core 0 only records them)
+- **49.90 fps (+0.2%, noise)**. Profile of core 0's entity+particle phases: only ~3% of the
+  frame now (RecursiveLightPoint 0.6%). Reverted.
+
+### Diagnostic: world model sizes (e1m3)
+- nodes 118 KB, planes 55 KB, leafs 81 KB, surfaces 337 KB, edges 101 KB, surfedges 100 KB,
+  vertexes 87 KB: ~880 KB, far more than the 256 KB L2, so locking the BSP walk's data in
+  the cache isn't an option.
+
+### Experiment: bitmap of used cl_entities slots for CL_RelinkEntities
+- Marked in CL_ParseUpdate, unmarked once empty and unlinked; the loop skips unmarked slots
+  (a cache miss per slot before). **50.20 fps (+0.8%, too small)**. Reverted.
+
+### Span loop analysis (cycle and instruction counters, micro-benchmark)
+- Real frames: 18.6 cycles and 12.6 instructions per pixel (~128k + 148k pixels per frame on
+  core 0 / core 1). The same loop on a synthetic job with texture and destination in internal
+  RAM: 13.2 cycles, 12.2 instructions per pixel (IPC 0.93). So ~5.4 cycles/pixel are memory
+  stalls. (The inner loop is 9 instructions/pixel; per-segment and per-span setup add ~3.
+  GCC also emits a useless loop version specialised for cachewidth == 1.)
+- Texels from a 2 KB SRAM table: 52.28 fps (+5%); span writes to one hot SRAM line (band
+  buffers already in SRAM): 49.88 (no change, band writes are free).
+- Experiment: constant-texture-row fast path (t's integer part equal at both segment ends,
+  typical on walls: 5 instead of 9 instructions/pixel): **49.64 fps, no gain**. Reverted.
+- Experiment: 32-pixel segments where 1/z changes < 1% over 32 pixels (halves the
+  per-segment perspective work there): **49.67 fps, no gain**. Reverted.
+- Conclusion: span instructions don't set the frame time; memory traffic does.
+
+### Diagnostic: no PPA palette conversion at all (display shows stale frames)
+- **52.06 fps (+4.4%)**: the PPA's PSRAM traffic (reads 2 x 300 KB, writes 900 KB per frame)
+  slows the cores' cache misses noticeably.
+
+### Experiment: PPA blend foreground as A4 instead of A8
+- The foreground (the frame itself, alpha replaced by 0) only exists because blending needs
+  one; as A4 it reads 150 KB instead of 300 KB. Start-up self-test against the CPU
+  conversion: 0 bad bytes.
+- **50.33 fps (+1% vs 49.8)**, conversion 6.5 -> 6.1 ms. Kept: verified identical output, and
+  it reduces shared PSRAM traffic, which is a measured bottleneck.
+
+### Experiment: visible-surface bitset in internal RAM instead of msurface_t.visframe
+- The BSP walk stamped visframe into every surface of every visible leaf (PSRAM). A
+  660-byte bitset per frame instead: **50.39 fps (no gain vs 50.33)**; those lines are read
+  anyway. Reverted.
+
+## 2026-10-25 — Planned memory layout, step 1: free internal SRAM for deliberate use
+
+Internal memory (768 KB L2MEM): 256 KB is the L2 cache for PSRAM, ~445 KB general SRAM
+(DIRAM), plus 8 KB TCM and 32 KB LP RAM (both almost unused).
+
+### Measurements behind the plan
+- L2 cache 128 KB instead of 256 KB (the minimum; it can't be 0: PSRAM, including the 1.1 MB of
+  code executing from it, is only usable through the cache): **46.74-47.05 fps (-7%)**,
+  frees 128 KB. Per-function profile diff (samples per frame, both cores): world spans
+  reading the surface cache +290 kcycles/frame, alias spans on core 1 (skins, z, frame
+  buffer) +173 k, surface builds +77 k, the rest small and spread out (code, world data).
+- Surface-cache blocks used per frame: 240-620 KB on average, peaks 1.3 MB, mostly mip 0;
+  dynamically lit up to 350 KB. Too big to keep in SRAM as whole blocks: the L2 caching the
+  parts actually read is the right tool for it. So the cache stays 256 KB for now.
+- Internal data per engine source file: hot renderer data ~145 KB (r_main.c edges/surfaces
+  67 KB, r_edge.c span buffers/bands/edge lists 67 KB, d_jobs, d_polyse, r_zrows, r_alias,
+  r_surf); cold game state ~45 KB (client, keys, console, menu, server, progs, net...).
+- IDF code in IRAM: ~110 KB (hw support 23 KB, FreeRTOS 19, HAL 11, flash driver 8, system
+  8, heap 8, SPI 6, PSRAM init 5, ring buffer 5, gdbstub 4...).
+- The AXI performance monitor (PSRAM bandwidth per master) is only described for chip
+  revision 3; this board is v1.0. Not used.
+
+### Changes
+- components/quakegeneric/linker.lf: the cold engine objects' .bss goes to PSRAM (scheme
+  quake_extram_bss); the renderer's stays internal. Free internal RAM 44.6 -> 98.5 KB.
+- IDF functions moved out of IRAM: FreeRTOS, heap, ring buffer, logging, libc helpers, SPI
+  ISRs (some were forced back by dependencies); flash driver code stays (it must run while
+  flash writes suspend the cache). Panic handler: print and reboot instead of waiting in the
+  GDB stub (unattended runs no longer need a JTAG reset after a crash).
+- Free internal RAM **137 KB** (largest heap block 40 KB: big buffers should be static).
+- **50.05-50.06 fps (unchanged)**; 4 minutes through all demos: no faults.
+
+### Found: the "mysterious 19 fps" builds -- a task stack in LP RAM
+- Three earlier diagnostics (a 32 KB SRAM texture table, the span micro-benchmark, a 48 KB
+  SRAM build scratch) and a pure "ballast" test (unused static arrays in main/) all dropped
+  to ~19 fps once free internal RAM fell below ~40 KB. Not an allocation failure (failed-alloc
+  callback silent, no small malloc fell back to PSRAM), not corruption (screenshots fine), no
+  slow SRAM region (read latency uniform). The core-1 profile showed the alias code crawling
+  plus ~13% in trap/interrupt entry (lazy FPU/PIE context traps).
+- Task stack addresses: in the slow builds the core-1 job worker's stack was at 0x50108408,
+  in the 32 KB **LP RAM**, which IDF adds to the heap (CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_
+  HEAP) and which is slow for the HP cores. With the main heap tight, xTaskCreate put the stack
+  there; every stack access of core 1's drawing code paid for it.
+- Fix: LP RAM no longer part of the heap (kept for deliberate use), and the worker's stack is a
+  static array in internal SRAM. With free internal RAM pushed down to 36 KB: **49.96 fps**
+  (was 19). Normal build 49.95 fps, 105.6 KB free.
+- Earlier results affected (they were measuring this, not what they intended): the 32 KB SRAM
+  texture diagnostic, the 19 fps span micro-benchmark run, the 48 KB build-scratch diagnostic.
+
+### Diagnostic (corrected, after the LP RAM fix): surface builds into SRAM
+- Builds write a 40 KB SRAM scratch instead of their PSRAM block (wrong texels):
+  **50.44 fps (+1% vs 49.95)**. With dynamic-light reuse there are only ~16 builds per frame
+  now; an SRAM tier for builds isn't worth it.
+
+### Experiment: world z in SRAM bands, copied out by DMA with the pixels
+- Two 16-row z bands (40 KB SRAM); jobs remember their z band; each band's used row ranges
+  (d_zrowmin..max widened to 128-byte lines) go out in the same GDMA transfer as the pixels
+  (multi-segment link list, QG_CopyStartMulti). Screenshots correct (models occluded by walls).
+- **49.42 fps (-1% vs 49.95)**. Reverted. The CPU no longer stalls on z writes, but the same
+  (slightly more) data still goes to PSRAM: the shared PSRAM bandwidth, not the CPU's write
+  latency, is what costs. Lesson for the memory plan: moving PSRAM writes to DMA only pays when
+  the CPU would otherwise wait for them (the frame buffer's write-allocate fills); it doesn't
+  reduce traffic. Real gains need traffic that disappears (data that never leaves SRAM).
+
+## 2026-10-25 — Memory hierarchy benchmark and budget document
+- main/membench.c (CONFIG_QUAKE_MEMBENCH): latency (pointer chase) and bandwidth of TCM,
+  internal SRAM, PSRAM (L1/L2-resident and uncached), GDMA. Key results: L1 hit 3 cycles
+  (SRAM or PSRAM), L1 miss to SRAM or L2 hit ~12 cycles, PSRAM miss ~177 cycles (492 ns) idle /
+  ~207 (576 ns) with HDMI scan-out; TCM 4 cycles and slow writes; one core streams ~190 MB/s
+  from PSRAM; GDMA SRAM->PSRAM 138 MB/s.
+- BENCH now also prints the PSRAM heap (3.8 MB free of 30.2 MB).
+- MEMORY_AND_COMPUTE_BUDGET.md: chip/memory hierarchy (datasheet and measured), where all
+  memory is allocated, PSRAM traffic budget, per-code-area time per frame on both cores.
+
+## 2026-10-25 — Expanded memory/cache/DMA benchmark, DW-GDMA band copy, and scoped L2 autoload
+
+### Expanded hardware benchmark (main/membench.c, commit 8bbc7f2)
+- Fixed TCM write/copy cache-flush artifact (TCM wr128 is 4,571 MB/s, cp128 is 3,023 MB/s) and
+  chunked manual L2 preload (`Cache_Start_L2_Cache_Preload` size field is 16-bit, `<= 32 KB` per
+  call: 357 MB/s preload, 1,756 MB/s subsequent L2 hit; overlapped L2 preload + CPU 2x rd128
+  raises streaming throughput from 208 to 285 MB/s).
+- Benchmarked all 4 DMA architectures on ESP32-P4:
+  - AHB-GDMA: 86 MB/s SRAM->PSRAM.
+  - AXI-GDMA: 172 MB/s (32 KB) / 154 MB/s (10 KB band) SRAM->PSRAM.
+  - DW-GDMA (`DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS`, `width = 64-bit`, `burst_items = 64`,
+    `out_req = 4..16`): **557 MB/s** SRAM->PSRAM (544 MB/s with HDMI active), **337 MB/s**
+    PSRAM->SRAM, **228 MB/s** PSRAM->PSRAM (456 MB/s combined read+write), and **616 MB/s**
+    hardware fixed-source fill (`memset`) to PSRAM (**77% of the 800 MB/s Xccela PSRAM peak**).
+  - 2D-DMA + PPA: `ppa_do_fill` reaches **602 MB/s** (ARGB8888) / **523 MB/s** (RGB888) to PSRAM
+    with `PPA_DATA_BURST_LENGTH_128`.
+- L2 hardware autoload (`trigger = miss+hit`, `order = asc/desc`) raises single-core sequential
+  PSRAM `rd128` from 218 to **284 MB/s (+30%)** and `rd32` from 187 to **284 MB/s (+52%)**.
+
+### Experiment: DW-GDMA contiguous block mode in main/bandcopy.c (replaces AXI-GDMA)
+- Replaced the AXI-GDMA TX+RX channel pair and descriptor link lists in `main/bandcopy.c` with a
+  single DW-GDMA channel in contiguous block mode (`DW_GDMA_BLOCK_TRANSFER_CONTIGUOUS`,
+  `width = DW_GDMA_TRANS_WIDTH_64`, `burst_items = DW_GDMA_BURST_ITEMS_64`, `burst_len = 16`,
+  `num_outstanding_requests = 8`).
+- Each 10 KB band copy now runs at ~544 MB/s (~18.8 us on the PSRAM bus vs ~66 us with AXI-GDMA),
+  leaving the MSPI PSRAM bus free for CPU cache misses sooner, and frees 2,072 bytes of internal
+  SRAM (free internal RAM 105.6 -> 107.7 KB, largest block 53.2 -> 55.3 KB).
+- **50.38 fps (+0.8% vs 49.98)** (504 frames / 10.00 s). Kept.
+
+### Experiment: Scoped L2 hardware autoload (`trigger = miss+hit`) on `surfcache` and `hunk`
+- Earlier autoload failures were caused by enabling autoload over DMA-written buffers (frame
+  buffers written by band DMA, or hunk memory being written by SD card DMA during `fread`) or
+  unaligned region edges overlapping adjacent allocations.
+- Configured L2 hardware autoload (`CACHE_AUTOLOAD_BOTH_TRIGGER`, `CACHE_AUTOLOAD_POSITIVE`) with
+  strictly inward-rounded 128-byte cache-line bounds (`(start + 127) & ~127` to `end & ~127`):
+  - Region 0 (`ena0 = 1`) on `surfcache` (`3,937 KB`, pure CPU read/write): **51.04 fps (+2.1%
+    vs 49.98 baseline, +1.3% vs 50.38 DW-GDMA)** (511 frames / 10.01 s).
+  - Region 0 (`surfcache`) + Region 1 (`ena1 = 1`, `16 MB` `hunk_base`), with
+    `Cache_Suspend_L2_Cache_Autoload` / `Cache_Resume_L2_Cache_Autoload` wrapping `fread` in
+    `Sys_FileRead` (`sys_null.c`) so SDMMC DMA never races with L2 prefetch: **51.16 fps (+2.4%
+    vs 49.98 baseline)** (512 frames / 10.01 s). Kept.
+
+### Experiment: Candidate 4 — Compact `job_t` (116 -> 68 B), `jobs[]` in internal SRAM, `MAXHEIGHT=480` / `MAXWIDTH=640`
+- Split `drawsurf_t ds` (48 B, only needed by the ~16 surface-build jobs per frame) out of
+  `job_t` into `build_ds[256]`, shrinking `job_t` from 116 to 68 B, and moved `jobs[1024]` from
+  PSRAM (`EXT_RAM_BSS_ATTR`) into internal SRAM (`d_jobs.c`).
+- Reduced `MAXHEIGHT` (`1024 -> 480`) and `MAXWIDTH` (`1280 -> 640`) in `r_shared.h` and
+  `d_ifacea.h` to shrink per-scanline tables (`newedges`, `removeedges`, `d_zrowmin`, `d_zrowmax`,
+  `sintable`, `intsintable`).
+- **51.75 fps (+1.2% vs 51.16, +3.5% vs 49.98 baseline)** (518 frames / 10.01 s). Kept.
+
+### Experiment: Candidate 5 — 8 KB TCM (`SPM_DRAM_ATTR`) for `d_zrowmin/max` + `newedges/removeedges` and 2-pixel paired Z-test in `D_PolysetDrawSpans8`
+- Placed `d_zrowmin`/`d_zrowmax` and `newedges`/`removeedges` in the 8 KB TCM (`SPM_DRAM_ATTR`),
+  moved Core 1's alias `spans[]` to internal SRAM, and unrolled `D_PolysetDrawSpans8` 2x with
+  paired 32-bit Z loads.
+- **51.39 fps (-0.7% vs 51.75)**: TCM bypasses the 3-cycle L1 D-cache (paying 4 cycles + dual-core
+  port contention when both cores access `d_zrowmin/max`), and short monster triangle spans pay
+  extra branch overhead on the 2-pixel alignment prologue/epilogue.
+- Tested branchless `ltfrac` carry alone in `d_polyse.c`: **51.65 fps** (noise vs 51.75; alias
+  rasterisation runs on Core 1, which is not the pacing core). Both reverted.
+
+### Experiment: Candidate 6 — Manual L2 preload (`Cache_Start_L2_Cache_Preload`) of `jobs[i+2].cacheblock` in `D_RunJobs`
+- Issued non-blocking `Cache_Start_L2_Cache_Preload` (`<= 32 KB`) for `jobs[i+2].cacheblock`
+  (`cachewidth * height` bytes) before running `jobs[i]`.
+- **49.36 fps (-4.6% vs 51.75)**: each band job only draws a 16-row screen band and touches a
+  small slice of `cacheblock`; preloading the entire surface block across 27 bands floods the
+  shared PSRAM bus with unused texel rows and evicts live L2 lines, whereas hardware L2 autoload
+  only prefetches the +128 B line adjacent to the active texel row. Reverted.
+
+### Bugfix: Static entities (torches `progs/flame.mdl`, `progs/flame2.mdl`) visible through walls
+- Root cause: `R_ComputeZRows()` (`r_zrows.c`) was called in `R_RenderView_` (`r_main.c`) before
+  `R_EdgeDrawing()`. However, static entities (`cl_static_entities`, including all torches) live in
+  BSP leaf `efrag` lists (`pleaf->efrags`) and are only appended to `cl_visedicts[]` when
+  `R_RenderWorld()` walks the visible BSP leaves and calls `R_StoreEfrags(&pleaf->efrags)` inside
+  `R_EdgeDrawing()`. Because `R_ComputeZRows()` ran before `R_RenderWorld()`, static entities were
+  never included in `d_zrowmin[]`/`d_zrowmax[]`, so the sparse world Z-buffer fill skipped the
+  screen pixels behind torches unless another dynamic entity/particle happened to overlap them.
+- Fix: Moved `R_ComputeZRows()` inside `R_EdgeDrawing()` immediately after `R_RenderWorld()` (before
+  `R_ScanEdges()`), when `cl_visedicts[]` contains both dynamic and visible static entities.
+- **51.49 fps** (515 frames / 10.00 s; -0.26 fps vs 51.75 because world Z-spans are now properly
+  written for the screen rectangles behind visible torches). Kept.
+
+### Experiment: Candidate 3 — `R_EmitEdge`/`R_RenderFace` FPU overlap & hardware `fcvt.w.s rup`, `R_LeadingEdge` fast path, and exact 2D extent culling in `R_MarkLights`
+- `r_draw.c` (`R_EmitEdge`, `R_RenderFace`):
+  - Replaced external `newlib` `ceilf()` calls (2 per edge) with a single-instruction RISC-V FPU
+    ceiling conversion (`fcvt.w.s %0, %1, rup`), eliminating register spills across function calls.
+  - Inlined `TransformVector` and issued non-blocking `fdiv.s` (`1.0f / tz`, `du / dv`, and
+    `1.0f / dist`) before computing the `x`/`y` dot products and `surface_p`/`edge` stores so
+    compute hides the 20-cycle FPU divide latency.
+  - Prefetched the next surfedge's `medge_t` (`__builtin_prefetch`) in `R_RenderFace`.
+- `d_edge.c` (`D_CalcGradients`): inlined `TransformVector` and `VectorScale`.
+- `r_edge.c` (`R_LeadingEdge`, `R_GenerateSpans`): added a non-submodel fast path in `R_LeadingEdge`
+  and prefetched `edge->next` in `R_GenerateSpans`.
+- `r_light.c` (`R_MarkLights`): culled dynamic lights against each surface's actual `(s, t)` extents
+  (`texturemins` / `extents`) and `minlight` using the exact distance formula of
+  `R_AddDynamicLights` instead of marking every coplanar surface on the infinite splitting plane.
+  Reduced surface builds per frame from **16.0 (84,840 texels, 13.8 dlight)** to **11.8 (67,332
+  texels, 9.8 dlight)** (-26% surface builds).
+- **52.58 fps (+1.09 fps / +2.1% vs 51.49, +5.2% vs 49.98 baseline)** (526 frames / 10.00 s). Kept.
+
+
+
+## 2026-10-25 — Stability investigation: crashes/reboots (branch `stability-debug`)
+
+Tooling (CONFIG_QUAKE_STABILITY_DEBUG, main/stability.c; costs ~0.5 fps): reset reason plus the
+previous run's last state/PCs from .noinit at boot; a stall watchdog sampling both cores' PCs
+(ASSIST_DEBUG) and the job/pipe/bandcopy state; a black-frame detector; heap headroom, a
+failed-allocation hook, PVT/DC-DC state and an LT8912B DSI-sync probe every 10 s.
+tools/debug/hang_snapshot.gdb + `openocd -c "set ESP_FLASH_SIZE 0" -f board/esp32p4-builtin.cfg`
+attaches to a running/hung board WITHOUT resetting it (with flash support on, OpenOCD's
+gdb-attach handler does `reset halt` because memory protection is enabled -- that is why
+earlier JTAG attaches reset the chip). Verified: attach, dump all tasks, detach, game continues.
+
+### Finding 1: memory corruption crashes, triggered by L2 autoload (689f20d)
+- Diagnostics build (= clean HEAD + STAB code), autoload ON: **3 panics in 660 s**, each in a
+  different consumer of corrupted data: Load fault in R_MarkLights (core 0, BSP node pointer),
+  Load fault in D_PolysetDrawSpans8_c1 (core 1, span package with float garbage in pz/pdest),
+  Store fault in D_DrawSpans8Job (core 0, garbage span coordinates).
+- Same build, CONFIG_QUAKE_L2_AUTOLOAD=n: **0 panics in 1144 s** (p ~0.5% if the rate were
+  unchanged). 51.5 vs 52.3 fps. Consistent with the earlier note that the ROM autoload API
+  is unsafe on this chip.
+
+### Finding 2: the core supply is at its limit (hardware)
+- PVT auto-dbias (CONFIG_ESP_ENABLE_PVT) requests HP dbias **31 = the maximum** from boot and
+  all the time (dcm_vset 27 = ~1.25 V target). This board is an Olimex ESP32-P4-PC **Rev.B**:
+  VDD_HP comes from a TPS62A02 (U5; not on Espressif's list of verified DC-DC parts -- Rev.C
+  switched to the listed TLV62569) with a 10.5k/10.5k feedback divider (R46/R47, same in Rev.C)
+  on FB_DCDC; Espressif's guideline
+  for chip rev v1.0/v1.3 is to leave those resistors unpopulated (pads only), and advisory
+  AR2025-005 says even 499k||499k limits the voltage and causes instability at 360 MHz.
+  Likely makes the chip marginal at 360 MHz; autoload's extra traffic may be what tips it.
+
+### Finding 3: internal DMA RAM is ~20 KB from aborting
+- Steady state: DMA-capable internal free 23 KB, largest 16 KB. A build using ~19 KB more
+  internal RAM (coredump-to-flash) boot-looped: USB HID claim (256 B, DMA|INTERNAL) failed
+  with largest block 544 B -> ESP_ERROR_CHECK abort in usb_hid.c; the SD driver's bounce
+  buffer failed the same way. Profiling/experiment builds that put buffers in SRAM can hit this.
+
+### Not reproduced: black flashes
+- No DSI underrun, no black frames, no LT8912B input loss, no band-copy timeout in ~45 min of
+  logging. The probes stay in the diagnostics build for when it happens.
+
+### Changes kept (clean config, no diagnostics)
+- CONFIG_QUAKE_L2_AUTOLOAD now defaults to **off** (Kconfig); vid_null.c only configures
+  autoload when it is enabled.
+- CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y (sdkconfig.defaults): the USB host's DMA
+  buffers live in PSRAM. Tiny traffic (HID reports, descriptor lists); the driver syncs the
+  cache per transfer either way.
+- usb_hid.c: a HID device that fails to open/start is logged and skipped instead of
+  aborting (ESP_ERROR_CHECK rebooted the board); set_protocol/set_idle failures are warnings.
+- Result: **51.88 fps** (519 frames / 10.00 s; -1.3% vs 52.57 with autoload). Internal RAM
+  free 33.3 -> **41.4 KB**, largest block 19 -> **32 KB**. All 7 HID interfaces (keyboard +
+  mouse) enumerate. 4 min of play after the benchmark: no faults.
+- partitions.csv gains a 1 MB `coredump` partition (unused unless coredump-to-flash is
+  enabled, which costs ~19 KB internal RAM).
+
+### Experiment: single precision everywhere (no soft-float doubles in play)
+- ISA (readelf Tag_RISCV_arch): rv32imafc + zicsr/zifencei/zmmul/zaamo/zalrsc + xesppie. F only:
+  no D (every double op is a libgcc call: __adddf3, __ltdf2, ...) and no Zfh/Zfhmin, so float16
+  would be software too (xesppie SIMD is integer). float32 is the only hardware float.
+- Every `double` in the built engine sources is now `float` (host/client/server/net time,
+  QG_Tick). Host_FilterTime accumulates the time since the last frame instead of subtracting two
+  absolute times, so frame timing stays exact at any uptime (realtime as a float loses ~1 ms
+  resolution only after ~4.6 h, and is just a label for the console/net timeouts).
+  cl.time/sv.time restart with each map.
+- ceilf -> Q_ceil_int (mathlib.h, one fcvt.w.s rup) in alias gradients (D_PolysetCalcGradients,
+  both cores), sprite scan edges and R_EmitEdge. FloorDivMod uses integer division (its
+  arguments are always whole numbers). Invert24To16 (unused) made exact with integer math.
+- tan -> tanf (CalcFov); main/: audio volume, benchmark and fps-print constants made float
+  (main/ isn't built with -fsingle-precision-constant). Fixed `printf("%f", int)` in audio.c.
+- Remaining double code in play: only __extendsfdf2 for float arguments to printf/Sys_Error.
+- **52.33 fps (+0.9% vs 51.88)** (524 frames / 10.01 s). Kept.
+
+### Candidate 7 (NEW_OPTIMIZATION_CANDIDATES.md), remaining items
+- Already tried and logged as noise earlier: 32-bit loads/stores in R_DrawSurfaceBlock8 (twice)
+  and a reciprocal table for the span-tail divisions. Not repeated. The double/ceilf item
+  was done in the previous commit.
+- Skipped (estimated below the ~0.3% noise floor):
+  - R_MakeSky 4-pixel words: it only rebuilds when (int)(skytime*skyspeed) changes, i.e.
+    8 times a second (skyspeed 8), so ~1 frame in 7.
+  - R_BuildLightMap 4-wide: ~11.6 builds x ~100 samples x 1-4 styles per frame, ~0.03 ms.
+- Audio mixer (snd_mix.c): SND_PaintChannelFrom8 multiplies instead of looking every 8-bit
+  sample up in snd_scaletable[32][256] (32 KB in PSRAM; same values: (signed char)j *
+  (vol & ~7)); the table is gone. Snd_WriteLinearBlastStereo16 writes each stereo pair with
+  one 32-bit store.
+  - With paintbuffer (4 KB) also moved to internal RAM: 52.63 fps, but internal RAM free
+    42.5 -> 38.4 KB, largest block 32 -> 21.5 KB (the USB/SD margin).
+  - paintbuffer left in PSRAM: **52.62 fps (+0.6% vs 52.33)** (527 frames / 10.01 s),
+    internal RAM unchanged (42.5 KB, largest 32 KB). Kept.
+
+### Candidate 8: convert in strips so the PPA's dummy foreground comes from internal RAM
+- The blend engine always reads a foreground the size of the block (its alpha is forced to 0,
+  so the contents don't matter); today that's the frame itself read again as A4 (150 KB of
+  PSRAM per frame). There is no mode without a foreground read, and fg/bg blocks must match,
+  so the only way to source it from SRAM is to convert in strips sharing one small
+  zeroed foreground buffer (24 rows = 7.5 KB, DMA_ATTR).
+- 20 blocking strips: **51.15 fps (-2.8% vs 52.62)**, conversion 7.67 ms vs 6.24 ms per
+  frame; ~70 us per PPA operation (driver setup, cache syncs, waking the draw task, which
+  preempts the core-1 job worker).
+- 19 queued non-blocking + last blocking: **51.46 fps (-2.2%)**, 6.97 ms; and the
+  pending-transaction storage costs internal RAM (free 42.5 -> 28.8 KB, largest 19 KB).
+- Reverted. Per-operation PPA cost makes many-small-op designs lose; the same applies to a
+  per-band PPA conversion (Candidate 2, 30 bands per frame) unless it needs far fewer ops.
+
+## 2026-10-25 — Survey: PSRAM writes that could be staged in SRAM
+
+Earlier lesson (e7ce7e7): staging pays only when the CPU stalls on write-allocate fills or the
+data never needs to reach PSRAM; DMA-copying the same bytes out (world z bands) was -1%, and
+surface builds into SRAM were at most +1%.
+
+Per-frame PSRAM write streams: world pixels (already SRAM bands + DMA), world z (tried),
+surface cache builds (tried), and core 1's pipelined finish pass -- model/particle/HUD pixels
+into vid_buffer, model z, and the gun's 32-bit generation-tagged z-buffer (1.2 MB). Scratch
+arrays (alias spans[], finalverts/auxverts, r_pipe records) stay cache-resident.
+
+Profile (one 10 s run, both cores, 52.38 fps with the profiler): core 0 ~0.7% idle (paces the
+frame): D_DrawSpans8Job 36.2%, R_GenerateSpans 8.9%, R_DrawSurfaceBlock8_mip0 7.0%,
+D_DrawZSpansJob 3.3%. Core 1 9.2% idle: D_DrawSpans8Job 36.4%, D_PolysetDrawSpans8_c1 16.0%
+(of which the gun loop ~44%, hottest line the gun z test), R_DrawSurfaceBlock8_mip0_c1 5.6%,
+D_PolysetScanLeftEdge_c1 5.4%, D_RasterizeAliasPolySmooth_c1 3.0%, console/2D ~3.6%.
+
+### Diagnostic: gun drawn with no z test/write (wrong picture)
+- **53.74 fps (+2.1% vs 52.62)**: upper bound for the gun's z buffer.
+
+### Experiment: 16-bit gun z (4-bit generation + 12-bit 1/z), dirty-range clear on wrap
+- Halves the gun z bytes and cache-line misses; frees 600 KB PSRAM.
+- **52.77 fps (+0.3%, noise)**. Reverted. The gun's cost is the per-pixel z load -> compare ->
+  branch dependency, not PSRAM misses, so it's not a placement problem.
+
+## 2026-10-25 — Display mode: 720x480 tried, 1280x720 made the default
+
+### 720x480 (CEA 480p as VIC 3, 16:9) -- no picture on the monitor, reverted
+- Added a BSP/LT8912B mode: CEA vertical timing (480+9+6+30) with the horizontal blanking
+  shortened to 847 total (720+16+62+49) so the 640x480 mode's 160/6 MHz DPI clock gives
+  59.97 Hz; Quake rendered 720x480 natively (MAXWIDTH 720, 11.5 KB bands, 16:9 pixel aspect).
+- On the board everything worked: LT8912B locked, PPA self-test passed, screenshot correct,
+  **49.24 fps** (-6.4% vs 52.62 at 640x480; internal RAM largest block 32 -> 21.5 KB).
+- The user's monitor showed no picture (like 720x400@70 earlier). Likely causes: the
+  non-standard horizontal blanking or the 16:9 flag; exact 480p needs 27 MHz (858 total), which
+  the 160/240 MHz PLL dividers can't make. Not kept.
+
+### 1280x720 default (existing mode: Quake 512x288, PPA scales 2.5x)
+- **32.11 fps** (322 frames / 10.03 s); the user measured 33 fps in `timedemo demo1`.
+- Display-bound: per frame the CPU palette conversion to RGB565 takes 6.77 ms and the PPA
+  scale 23.63 ms (it writes a 2.76 MB RGB888 frame to PSRAM while scan-out reads ~166 MB/s).
+  The render resolution barely matters; the output size does.
+- Internal RAM free 42.6 KB, largest block 32 KB. sdkconfig.defaults now selects
+  CONFIG_BSP_LCD_HDMI_1280x720_60HZ; CONFIG_BSP_LCD_HDMI_640x480_60HZ is the ~52 fps mode.
+
+### Native 1280x720 (CONFIG_QUAKE_NATIVE_1280x720, off by default)
+- Quake renders 1280x720 directly (MAXWIDTH/MAXHEIGHT 1280/720, no bands: wider than
+  BAND_WIDTH); to fit PSRAM the hunk is 10 MB and the surface cache the stock size (3.1 MB).
+- **10.13 fps** (102 frames / 10.07 s); palette conversion 21.76 ms per frame; PSRAM free 142 KB.
+  Screenshot correct. Not practical.
+
+### 800x600 rendered natively, drawn for a 16:9 screen
+- QUAKEGENERIC_DISPLAY_ASPECT 16:9 (vid.aspect): the monitor stretches the 4:3 800x600 signal
+  (VESA, 40 MHz, AVI flagged 4:3) to 16:9, so Quake draws a wider view squeezed horizontally.
+  Only the 3D view is corrected; 2D (status bar, console) is drawn for square pixels.
+- MAXWIDTH/MAXHEIGHT 800/600, SRAM bands 800 wide (2 x 12.5 KB), surface cache 2x the formula
+  (3.6 MB) to fit PSRAM with the 16 MB hunk.
+- **38.28 fps** (383 frames / 10.00 s); palette conversion 10.47 ms per frame. Internal RAM free
+  36.0 KB, largest block 21.5 KB; PSRAM free 1.37 MB. Screenshot (stretched to 16:9) correct.
+- User's `timedemo demo1` on the same build (no profiling/diagnostics): **969 frames 25.4 s
+  38.2 fps**. Made the default (sdkconfig.defaults).
+
+## 2026-10-25 — Internal RAM: stacks and build_ds shrunk to measured peaks (timedemo demo1, 800x600)
+- New BENCH lines: peak jobs/builds per frame (with demand and refusals when the queue is full)
+  and every task's unused stack (high-water marks since boot).
+- Measured: job queue **full** (1024 of 1024; demand peaks at 1493; full in 43 of 970 frames,
+  8127 jobs refused and drawn by core 0 itself). With 38 band flushes per frame at 800x600 every
+  surface gets a 72 B job per band. Not shrunk: as built it needs ~1500 slots. Splitting job_t
+  into a per-surface record (~64 B, once per frame) and a per-flush entry (~12 B) would fit the
+  demand in ~44 KB instead of today's 87 KB (jobs + jobdone + build_ds).
+- Builds peak at 107 per frame: MAX_BUILDS 256 -> 160.
+- Stacks (size -> measured use -> new size): quake 32 KB -> 9.7 -> 16 KB; d_jobs worker
+  8 KB -> 2.4 -> 4 KB; draw 4 KB -> 3.7 (280 B left!) -> 5 KB (screenshot line buffer made
+  static); audio 4 KB -> 1.8 -> 3 KB; usbhid, usb_events, USB HID Host 4 KB -> 0.5-1.8 -> 3 KB.
+  System/lwIP/Ethernet tasks unchanged.
+- Result: **38.26 fps** (unchanged), internal RAM free **36.2 -> 62.4 KB, largest block
+  21.5 -> 51.2 KB**. Margins after the change: quake 6.4 KB, d_jobs 1.6 KB, draw 1.3 KB,
+  audio 1.2 KB, usbhid 1.3 KB.
+
+### Job queue split: per-surface records + 16-byte jobs (d_jobs.c)
+- A surface gets a job per span flush (38 bands per frame at 800x600), and each 72 B job used to
+  carry its own copy of the surface's gradients, block and extents. Now those live in a 60 B
+  per-surface record (jobrec_t), made the first time the surface is queued in a frame and reused
+  by its later jobs (surfaces[] lasts the whole frame; reuse also checks block and gradient
+  origin); a job is 16 B (spans, band pointer, record, wait job, build, colour flag).
+- MAX_JOBS 1024 -> 1600 (peak demand 1493), MAX_RECS 448 (peak 228). Tables: jobs 25.6 KB +
+  jobdone 6.4 + records 26.9 + recof 0.9 + build_ds 7.0 = 66.8 KB (was 85.4 KB with 1024 jobs).
+- timedemo demo1: **38.52 fps (+0.7% vs 38.26)**, queue never full (was full in 43 of 970
+  frames, 8127 surfaces drawn by core 0 itself). Internal RAM free **62.4 -> 80.3 KB, largest
+  block 51.2 -> 63.5 KB**. Attract demo 38.17 fps; the user checked the picture on the monitor.

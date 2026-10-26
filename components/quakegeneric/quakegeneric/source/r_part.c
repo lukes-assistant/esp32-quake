@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "r_local.h"
+#include "r_pipe.h"
 
 #define MAX_PARTICLES			2048	// default max # of particles at one
 										//  time
@@ -654,7 +655,10 @@ void R_DrawParticles (void)
 			break;
 		}
 
-		D_DrawParticle (p);
+		if (r_pipe_deferred3d)
+			R_PipeAddParticle (p);	// drawn by core 1 (r_pipe.c)
+		else
+			D_DrawParticle (p);
 
 		p->org[0] += p->vel[0]*frametime;
 		p->org[1] += p->vel[1]*frametime;

@@ -83,3 +83,17 @@ void D_ViewChanged (void)
 	}
 }
 
+
+/*
+D_SetZBuffer
+
+Switch to another z-buffer (ESP32-P4 port: they alternate per frame, see r_pipe.c).
+*/
+void D_SetZBuffer (short *zbuffer)
+{
+	int		i;
+
+	d_pzbuffer = zbuffer;
+	for (i = 0 ; i < vid.height ; i++)
+		zspantable[i] = d_pzbuffer + i*d_zwidth;
+}

@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sprites
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "d_local.h"
 
 static int		sprite_height;
@@ -208,14 +209,14 @@ void D_SpriteScanLeftEdge (void)
 	if (lmaxindex == 0)
 		lmaxindex = r_spritedesc.nump;
 
-	vtop = ceil (r_spritedesc.pverts[i].v);
+	vtop = (float)Q_ceil_int (r_spritedesc.pverts[i].v);
 
 	do
 	{
 		pvert = &r_spritedesc.pverts[i];
 		pnext = pvert - 1;
 
-		vbottom = ceil (pnext->v);
+		vbottom = (float)Q_ceil_int (pnext->v);
 
 		if (vtop < vbottom)
 		{
@@ -270,7 +271,7 @@ void D_SpriteScanRightEdge (void)
 	if (vvert > r_refdef.fvrectbottom_adj)
 		vvert = r_refdef.fvrectbottom_adj;
 
-	vtop = ceil (vvert);
+	vtop = (float)Q_ceil_int (vvert);
 
 	do
 	{
@@ -283,7 +284,7 @@ void D_SpriteScanRightEdge (void)
 		if (vnext > r_refdef.fvrectbottom_adj)
 			vnext = r_refdef.fvrectbottom_adj;
 
-		vbottom = ceil (vnext);
+		vbottom = (float)Q_ceil_int (vnext);
 
 		if (vtop < vbottom)
 		{
@@ -386,7 +387,7 @@ void D_DrawSprite (void)
 	int			i, nump;
 	float		ymin, ymax;
 	emitpoint_t	*pverts;
-	sspan_t		spans[MAXHEIGHT+1];
+	static EXT_RAM_BSS_ATTR sspan_t		spans[MAXHEIGHT+1];
 
 	sprite_spans = spans;
 
@@ -413,8 +414,8 @@ void D_DrawSprite (void)
 		pverts++;
 	}
 
-	ymin = ceil (ymin);
-	ymax = ceil (ymax);
+	ymin = (float)Q_ceil_int (ymin);
+	ymax = (float)Q_ceil_int (ymax);
 
 	if (ymin >= ymax)
 		return;		// doesn't cross any scans at all

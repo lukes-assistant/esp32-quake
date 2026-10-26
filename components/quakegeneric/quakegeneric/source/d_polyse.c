@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // texture (used for Alias models)
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "r_local.h"
 #include "d_local.h"
 
@@ -122,7 +123,7 @@ D_PolysetDraw
 */
 void D_PolysetDraw (void)
 {
-	spanpackage_t	spans[DPS_MAXSPANS + 1 +
+	static EXT_RAM_BSS_ATTR spanpackage_t	spans[DPS_MAXSPANS + 1 +
 			((CACHE_SIZE - 1) / sizeof(spanpackage_t)) + 1];
 						// one extra because of cache line pretouching
 
@@ -479,7 +480,7 @@ D_PolysetSetUpForLineScan
 void D_PolysetSetUpForLineScan(fixed8_t startvertu, fixed8_t startvertv,
 		fixed8_t endvertu, fixed8_t endvertv)
 {
-	double		dm, dn;
+	float		dm, dn;
 	int			tm, tn;
 	adivtab_t	*ptemp;
 
@@ -500,8 +501,8 @@ void D_PolysetSetUpForLineScan(fixed8_t startvertu, fixed8_t startvertv,
 	}
 	else
 	{
-		dm = (double)tm;
-		dn = (double)tn;
+		dm = (float)tm;
+		dn = (float)tn;
 
 		FloorDivMod (dm, dn, &ubasestep, &erroradjustup);
 
@@ -533,10 +534,10 @@ void D_PolysetCalcGradients (int skinwidth)
 // very visible, overflow is very unlikely, because of ambient lighting
 	t0 = r_p0[4] - r_p2[4];
 	t1 = r_p1[4] - r_p2[4];
-	r_lstepx = (int)
-			ceil((t1 * p01_minus_p21 - t0 * p11_minus_p21) * xstepdenominv);
-	r_lstepy = (int)
-			ceil((t1 * p00_minus_p20 - t0 * p10_minus_p20) * ystepdenominv);
+	r_lstepx =
+			Q_ceil_int((t1 * p01_minus_p21 - t0 * p11_minus_p21) * xstepdenominv);
+	r_lstepy =
+			Q_ceil_int((t1 * p00_minus_p20 - t0 * p10_minus_p20) * ystepdenominv);
 
 	t0 = r_p0[2] - r_p2[2];
 	t1 = r_p1[2] - r_p2[2];
@@ -586,6 +587,102 @@ void InitGel (byte *palette)
 D_PolysetDrawSpans8
 ================
 */
+/*
+ESP32-P4 port: the view model is drawn last, in front of everything (as GLQuake does; with
+its 3x z scale it practically always was), so it doesn't need the world's z (which is then
+not filled in its large screen box, r_zrows.c). It depth-tests only against itself, in a
+z-buffer of its own whose 32-bit entries carry a generation number in the high half: entries
+from earlier frames always compare as farther, so the buffer never needs clearing. Only one
+core draws the view model at a time (r_pipe.c).
+*/
+qboolean		d_alias_gunz;		// drawing the view model (one per core copy)
+#ifndef ALIAS_C1
+unsigned		*d_gunzbuffer;		// vid.width * vid.height entries (shared by both copies)
+unsigned		d_gunzgen;			// generation << 16
+
+void D_PolysetGunBegin (void)
+{
+	d_gunzgen += 0x10000;
+	if (!d_gunzgen)
+	{	// wrapped (every 65535 frames): clear the old generations
+		memset (d_gunzbuffer, 0, vid.width * vid.height * sizeof(unsigned));
+		d_gunzgen = 0x10000;
+	}
+}
+#else
+extern unsigned	*d_gunzbuffer, d_gunzgen;
+#endif
+
+static void D_PolysetDrawSpans8Gun (spanpackage_t *pspanpackage)
+{
+	int			lcount;
+	byte		*lpdest;
+	byte		*lptex;
+	int			lsfrac, ltfrac;
+	int			llight;
+	int			lzi;
+	unsigned	*lpz;
+	const byte	*colormap = (const byte *)acolormap;
+	const int	zistepx = r_zistepx, lstepx = r_lstepx;
+	const int	ststepxwhole = a_ststepxwhole, sstepxfrac = a_sstepxfrac;
+	const int	tstepxfrac = a_tstepxfrac, skinwidth = r_affinetridesc.skinwidth;
+	const unsigned	gen = d_gunzgen;
+
+	do
+	{
+		lcount = d_aspancount - pspanpackage->count;
+
+		errorterm += erroradjustup;
+		if (errorterm >= 0)
+		{
+			d_aspancount += d_countextrastep;
+			errorterm -= erroradjustdown;
+		}
+		else
+		{
+			d_aspancount += ubasestep;
+		}
+
+		if (lcount)
+		{
+			lpdest = pspanpackage->pdest;
+			lptex = pspanpackage->ptex;
+			lpz = d_gunzbuffer + (pspanpackage->pz - d_pzbuffer);	// same offset as in the z-buffer
+			lsfrac = pspanpackage->sfrac;
+			ltfrac = pspanpackage->tfrac;
+			llight = pspanpackage->light;
+			lzi = pspanpackage->zi;
+
+			do
+			{
+				unsigned	z = gen | ((unsigned)lzi >> 16);
+
+				if (z >= *lpz)
+				{
+					*lpdest = colormap[*lptex + (llight & 0xFF00)];
+					*lpz = z;
+				}
+				lpdest++;
+				lzi += zistepx;
+				lpz++;
+				llight += lstepx;
+				lptex += ststepxwhole;
+				lsfrac += sstepxfrac;
+				lptex += lsfrac >> 16;
+				lsfrac &= 0xFFFF;
+				ltfrac += tstepxfrac;
+				if (ltfrac & 0x10000)
+				{
+					lptex += skinwidth;
+					ltfrac &= 0xFFFF;
+				}
+			} while (--lcount);
+		}
+
+		pspanpackage++;
+	} while (pspanpackage->count != -999999);
+}
+
 void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 {
 	int		lcount;
@@ -595,6 +692,18 @@ void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 	int		llight;
 	int		lzi;
 	short	*lpz;
+	// locals: the byte stores below could alias these globals, so GCC would reload them
+	// on every pixel
+	const byte	*colormap = (const byte *)acolormap;
+	const int	zistepx = r_zistepx, lstepx = r_lstepx;
+	const int	ststepxwhole = a_ststepxwhole, sstepxfrac = a_sstepxfrac;
+	const int	tstepxfrac = a_tstepxfrac, skinwidth = r_affinetridesc.skinwidth;
+
+	if (d_alias_gunz)
+	{
+		D_PolysetDrawSpans8Gun (pspanpackage);
+		return;
+	}
 
 	do
 	{
@@ -625,22 +734,22 @@ void D_PolysetDrawSpans8 (spanpackage_t *pspanpackage)
 			{
 				if ((lzi >> 16) >= *lpz)
 				{
-					*lpdest = ((byte *)acolormap)[*lptex + (llight & 0xFF00)];
+					*lpdest = colormap[*lptex + (llight & 0xFF00)];
 // gel mapping					*lpdest = gelmap[*lpdest];
 					*lpz = lzi >> 16;
 				}
 				lpdest++;
-				lzi += r_zistepx;
+				lzi += zistepx;
 				lpz++;
-				llight += r_lstepx;
-				lptex += a_ststepxwhole;
-				lsfrac += a_sstepxfrac;
+				llight += lstepx;
+				lptex += ststepxwhole;
+				lsfrac += sstepxfrac;
 				lptex += lsfrac >> 16;
 				lsfrac &= 0xFFFF;
-				ltfrac += a_tstepxfrac;
+				ltfrac += tstepxfrac;
 				if (ltfrac & 0x10000)
 				{
-					lptex += r_affinetridesc.skinwidth;
+					lptex += skinwidth;
 					ltfrac &= 0xFFFF;
 				}
 			} while (--lcount);

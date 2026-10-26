@@ -194,7 +194,7 @@ int CDAudio_Init(void)
 	ringbuf=xRingbufferCreateWithCaps(RINGBUF_SZ, RINGBUF_TYPE_BYTEBUF, MALLOC_CAP_SPIRAM);
 	assert(ringbuf);
 	player_ctl_mux=xSemaphoreCreateMutex();
-	xTaskCreatePinnedToCore(cd_task, "cdaudio", 4096, NULL, 4, NULL, 1);
+	xTaskCreatePinnedToCore(cd_task, "cdaudio", 4096, NULL, 7, NULL, 1);
 	return 1;
 }
 

@@ -20,7 +20,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_main.c
 
 #include "quakedef.h"
+#include "esp_attr.h"
 #include "r_local.h"
+#include "r_pipe.h"
 
 //define	PASSAGES
 
@@ -201,6 +203,11 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_waterwarp);
 	Cvar_RegisterVariable (&r_fullbright);
 	Cvar_RegisterVariable (&r_drawentities);
+	{
+		extern cvar_t	r_pipeline;
+
+		Cvar_RegisterVariable (&r_pipeline);
+	}
 	Cvar_RegisterVariable (&r_drawviewmodel);
 	Cvar_RegisterVariable (&r_aliasstats);
 	Cvar_RegisterVariable (&r_dspeeds);
@@ -443,7 +450,7 @@ void R_ViewChanged (vrect_t *pvrect, int lineadj, float aspect)
 	for (i=0 ; i<4 ; i++)
 		VectorNormalize (screenedge[i].normal);
 
-	res_scale = sqrt ((double)(r_refdef.vrect.width * r_refdef.vrect.height) /
+	res_scale = sqrt ((float)(r_refdef.vrect.width * r_refdef.vrect.height) /
 			          (320.0 * 152.0)) *
 			(2.0 / r_refdef.horizontalFieldOfView);
 	r_aliastransition = r_aliastransbase.value * res_scale;
@@ -652,7 +659,7 @@ int R_BmodelCheckBBox (model_t *clmodel, float *minmaxs)
 {
 	int			i, *pindex, clipflags;
 	vec3_t		acceptpt, rejectpt;
-	double		d;
+	float		d;
 
 	clipflags = 0;
 
@@ -844,11 +851,15 @@ void R_DrawBEntitiesOnList (void)
 R_EdgeDrawing
 ================
 */
+// peak per-frame usage of the edge and surface arrays, for sizing them
+int r_peak_edges, r_peak_surfs;
+
 void R_EdgeDrawing (void)
 {
-	edge_t	ledges[NUMSTACKEDGES +
+	// static rather than on the stack, so they live in internal SRAM
+	static edge_t	ledges[NUMSTACKEDGES +
 				((CACHE_SIZE - 1) / sizeof(edge_t)) + 1];
-	surf_t	lsurfs[NUMSTACKSURFACES +
+	static surf_t	lsurfs[NUMSTACKSURFACES +
 				((CACHE_SIZE - 1) / sizeof(surf_t)) + 1];
 
 	if (auxedges)
@@ -881,8 +892,15 @@ void R_EdgeDrawing (void)
 
 	R_RenderWorld ();
 
+	R_ComputeZRows ();
+
 	if (r_drawculledpolys)
 		R_ScanEdges ();
+
+	if (edge_p - r_edges > r_peak_edges)
+		r_peak_edges = edge_p - r_edges;
+	if (surface_p - surfaces > r_peak_surfs)
+		r_peak_surfs = surface_p - surfaces;
 
 // only the world can be drawn back to front with no z reads or compares, just
 // z writes, so have the driver turn z compares on now
@@ -915,6 +933,213 @@ void R_EdgeDrawing (void)
 
 
 /*
+=============
+R_DrawEntitiesAndViewModel
+
+ESP32-P4 port: replaces R_DrawEntitiesOnList + R_DrawViewModel. Core 0 culls the alias
+models, works out their lighting (R_LightPoint isn't thread-safe) and loads them
+(Mod_Extradata touches the cache LRU); then both cores draw the whole list at once, core 0
+clipped to the left half of the columns and core 1 (r_alias_c1.c) to the right half (the view
+model, usually the biggest, is centred horizontally, so this balances well). Sprites
+are drawn by core 0 afterwards.
+=============
+*/
+qboolean	r_alias_split;
+
+static void R_AliasModelLighting (alight_t *lighting, float *lightvec)
+{
+	int		j, lnum;
+	vec3_t	dist;
+	float	add;
+
+	j = R_LightPoint (currententity->origin);
+
+	lighting->ambientlight = j;
+	lighting->shadelight = j;
+
+	lighting->plightvec = lightvec;
+
+	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	{
+		if (cl_dlights[lnum].die >= cl.time)
+		{
+			VectorSubtract (currententity->origin,
+							cl_dlights[lnum].origin,
+							dist);
+			add = cl_dlights[lnum].radius - Length(dist);
+
+			if (add > 0)
+				lighting->ambientlight += add;
+		}
+	}
+
+// clamp lighting so it doesn't overbright as much
+	if (lighting->ambientlight > 128)
+		lighting->ambientlight = 128;
+	if (lighting->ambientlight + lighting->shadelight > 192)
+		lighting->shadelight = 192 - lighting->ambientlight;
+}
+
+// same as R_DrawViewModel, up to the drawing
+static qboolean R_ViewModelLighting (alight_t *lighting, float *lightvec)
+{
+	int			j, lnum;
+	vec3_t		dist;
+	float		add;
+	dlight_t	*dl;
+
+	if (!r_drawviewmodel.value || r_fov_greater_than_90)
+		return false;
+	if (cl.items & IT_INVISIBILITY)
+		return false;
+	if (cl.stats[STAT_HEALTH] <= 0)
+		return false;
+
+	currententity = &cl.viewent;
+	if (!currententity->model)
+		return false;
+
+	VectorCopy (currententity->origin, r_entorigin);
+	VectorSubtract (r_origin, r_entorigin, modelorg);
+
+	VectorCopy (vup, viewlightvec);
+	VectorInverse (viewlightvec);
+
+	j = R_LightPoint (currententity->origin);
+
+	if (j < 24)
+		j = 24;		// allways give some light on gun
+	lighting->ambientlight = j;
+	lighting->shadelight = j;
+
+	for (lnum=0 ; lnum<MAX_DLIGHTS ; lnum++)
+	{
+		dl = &cl_dlights[lnum];
+		if (!dl->radius)
+			continue;
+		if (dl->die < cl.time)
+			continue;
+
+		VectorSubtract (currententity->origin, dl->origin, dist);
+		add = dl->radius - Length(dist);
+		if (add > 0)
+			lighting->ambientlight += add;
+	}
+
+	if (lighting->ambientlight > 128)
+		lighting->ambientlight = 128;
+	if (lighting->ambientlight + lighting->shadelight > 192)
+		lighting->shadelight = 192 - lighting->ambientlight;
+
+	lighting->plightvec = lightvec;
+	return true;
+}
+
+static aliasitem_t	r_gunitem;
+static qboolean		r_gunitem_valid;
+
+// frames not deferred to core 1: the view model, after particles (d_polyse.c)
+static void R_DrawViewModelItem (void)
+{
+	if (!r_gunitem_valid)
+		return;
+	r_gunitem_valid = false;
+	R_DrawAliasItems (&r_gunitem, 1);
+}
+
+void R_DrawEntitiesAndViewModel (void)
+{
+	static EXT_RAM_BSS_ATTR aliasitem_t	items[MAX_VISEDICTS + 1];
+	static float	lightvec[3] = {-1, 0, 0};	// FIXME: remove and do real lighting
+	int				i, count = 0, saved_right;
+	refdef_t		refdef_c1;
+	qboolean		deferred = R_PipeDefer3D ();
+
+	if (r_drawentities.value)
+	{
+		for (i=0 ; i<cl_numvisedicts ; i++)
+		{
+			currententity = cl_visedicts[i];
+
+			if (currententity == &cl_entities[cl.viewentity])
+				continue;	// don't draw the player
+			if (currententity->model->type != mod_alias)
+				continue;
+
+			VectorCopy (currententity->origin, r_entorigin);
+			VectorSubtract (r_origin, r_entorigin, modelorg);
+
+			if (!R_AliasCheckBBox ())
+				continue;
+
+			R_AliasModelLighting (&items[count].lighting, lightvec);
+			Mod_Extradata (currententity->model);
+			items[count].entity = currententity;
+			items[count].viewmodel = false;
+			count++;
+		}
+	}
+
+	if (R_ViewModelLighting (&items[count].lighting, lightvec))
+	{
+		Mod_Extradata (currententity->model);
+		items[count].entity = currententity;
+		items[count].viewmodel = true;
+		count++;
+	}
+
+	if (count && deferred)
+	{
+		R_PipeAddAlias (items, count);	// all drawn by core 1 later (r_pipe.c)
+		count = 0;
+	}
+	// the view model is drawn last, in front of everything (R_DrawViewModelItem)
+	r_gunitem_valid = count && items[count - 1].viewmodel;
+	if (r_gunitem_valid)
+	{
+		r_gunitem = items[count - 1];
+		count--;
+	}
+	if (count)
+	{
+	// left half of the columns on core 0, right half on core 1
+		refdef_c1 = r_refdef;
+		refdef_c1.aliasvrect.x = (r_refdef.aliasvrect.x + r_refdef.aliasvrectright) / 2;
+		saved_right = r_refdef.aliasvrectright;
+		r_refdef.aliasvrectright = refdef_c1.aliasvrect.x;
+
+		r_alias_split = true;
+		R_PipeSnapshotView ();
+		R_AliasC1Start (items, count, &refdef_c1);
+		R_DrawAliasItems (items, count);
+		R_AliasC1Wait ();
+		r_alias_split = false;
+
+		r_refdef.aliasvrectright = saved_right;
+	}
+
+	if (r_drawentities.value)
+	{
+		for (i=0 ; i<cl_numvisedicts ; i++)
+		{
+			currententity = cl_visedicts[i];
+			if (currententity == &cl_entities[cl.viewentity])
+				continue;
+			if (currententity->model->type != mod_sprite)
+				continue;
+			if (deferred)
+			{
+				R_PipeAddSprite (currententity);	// drawn by core 1 (r_pipe.c)
+				continue;
+			}
+			VectorCopy (currententity->origin, r_entorigin);
+			VectorSubtract (r_origin, r_entorigin, modelorg);
+			R_DrawSprite ();
+		}
+	}
+}
+
+/*
 ================
 R_RenderView
 
@@ -945,7 +1170,7 @@ SetVisibilityByPassages ();
 
 	if (!cl_entities[0].model || !cl.worldmodel)
 		Sys_Error ("R_RenderView: NULL worldmodel");
-		
+
 	if (!r_dspeeds.value)
 	{
 		VID_UnlockBuffer ();
@@ -968,7 +1193,7 @@ SetVisibilityByPassages ();
 		de_time1 = se_time2;
 	}
 
-	R_DrawEntitiesOnList ();
+	R_DrawEntitiesAndViewModel ();
 
 	if (r_dspeeds.value)
 	{
@@ -976,7 +1201,7 @@ SetVisibilityByPassages ();
 		dv_time1 = de_time2;
 	}
 
-	R_DrawViewModel ();
+	// (the view model is drawn by R_DrawEntitiesAndViewModel)
 
 	if (r_dspeeds.value)
 	{
@@ -985,6 +1210,7 @@ SetVisibilityByPassages ();
 	}
 
 	R_DrawParticles ();
+	R_DrawViewModelItem ();
 
 	if (r_dspeeds.value)
 		dp_time2 = Sys_FloatTime ();
@@ -993,6 +1219,9 @@ SetVisibilityByPassages ();
 		D_WarpScreen ();
 
 	V_SetContentsColor (r_viewleaf->contents);
+
+	// the rest of the frame (2D, present) is recorded for core 1
+	R_PipeStartRecording ();
 
 	if (r_timegraph.value)
 		R_TimeGraph ();

@@ -23,6 +23,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "usb/usb_host.h"
+#include "soc/usb_dwc_struct.h"
 #include "errno.h"
 #include "hid_ev.h"
 
@@ -90,14 +91,11 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
 	size_t data_length = 0;
 	hid_host_dev_params_t dev_params;
 	hidev_device_t **hidev_dev_ptr=(hidev_device_t**)arg;
-	ESP_ERROR_CHECK(hid_host_device_get_params(hid_device_handle, &dev_params));
+	if (hid_host_device_get_params(hid_device_handle, &dev_params)!=ESP_OK) return;
 
 	switch (event) {
 	case HID_HOST_INTERFACE_EVENT_INPUT_REPORT:
-		ESP_ERROR_CHECK(hid_host_device_get_raw_input_report_data(hid_device_handle,
-																  data,
-																  64,
-																  &data_length));
+		if (hid_host_device_get_raw_input_report_data(hid_device_handle, data, 64, &data_length)!=ESP_OK) break;
 		//only parse report if we already have the report descriptors
 		if (*hidev_dev_ptr) {
 			hidev_parse_report(*hidev_dev_ptr, data, 0);
@@ -106,7 +104,8 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
 	case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
 		ESP_LOGI(TAG, "HID Device, protocol '%s' DISCONNECTED",
 				 hid_proto_name_str[dev_params.proto]);
-		ESP_ERROR_CHECK(hid_host_device_close(hid_device_handle));
+		esp_err_t err=hid_host_device_close(hid_device_handle);
+		if (err!=ESP_OK) ESP_LOGW(TAG, "closing the device failed: %s", esp_err_to_name(err));
 		break;
 	case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
 		ESP_LOGI(TAG, "HID Device, protocol '%s' TRANSFER_ERROR",
@@ -119,8 +118,29 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
 	}
 }
 
+//Mouse motion is accumulated here rather than queued: a gaming mouse reports up to
+//1000 times a second, far faster than the game drains the queue once per frame.
+static portMUX_TYPE mouse_mux=portMUX_INITIALIZER_UNLOCKED;
+static int mouse_dx=0, mouse_dy=0;
+
 static void hidev_cb(hid_ev_t *event) {
+	if (event->type==HIDEV_EVENT_MOUSE_MOTION) {
+		taskENTER_CRITICAL(&mouse_mux);
+		mouse_dx+=event->mouse_motion.dx;
+		mouse_dy+=event->mouse_motion.dy;
+		taskEXIT_CRITICAL(&mouse_mux);
+		return;
+	}
 	xQueueSend(hidev_event_queue, event, pdMS_TO_TICKS(1000));
+}
+
+void usb_hid_get_mouse_motion(int *dx, int *dy) {
+	taskENTER_CRITICAL(&mouse_mux);
+	*dx=mouse_dx;
+	*dy=mouse_dy;
+	mouse_dx=0;
+	mouse_dy=0;
+	taskEXIT_CRITICAL(&mouse_mux);
 }
 
 
@@ -140,8 +160,11 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
 						   void *arg)
 {
 	hid_host_dev_params_t dev_params;
-	ESP_ERROR_CHECK(hid_host_device_get_params(hid_device_handle, &dev_params));
+	esp_err_t err;
+	if (hid_host_device_get_params(hid_device_handle, &dev_params)!=ESP_OK) return;
 
+	//A device that can't be set up (e.g. ESP_ERR_NO_MEM: internal DMA RAM is tight) is logged
+	//and skipped; aborting here used to reboot the board.
 	switch (event) {
 	case HID_HOST_DRIVER_EVENT_CONNECTED:
 		ESP_LOGI(TAG, "HID Device, protocol '%s' CONNECTED",
@@ -151,22 +174,39 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
 			//workaround as we cannot create the hidev without the report, but we cannot get the
 			//report before calling hid_host_device_open, which needs the hidev_device.
 			hidev_device_t **hidev_ptr=calloc(sizeof(hidev_device_t*), 1);
+			if (!hidev_ptr) {
+				ESP_LOGE(TAG, "HID Device skipped: out of memory");
+				break;
+			}
 			const hid_host_device_config_t dev_config = {
 				.callback = hid_host_interface_callback,
 				.callback_arg = hidev_ptr
 			};
 
-			ESP_ERROR_CHECK(hid_host_device_open(hid_device_handle, &dev_config));
-		
-
-		if (dev_params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
-			ESP_ERROR_CHECK(hid_class_request_set_protocol(hid_device_handle, HID_REPORT_PROTOCOL_REPORT));
-			if (dev_params.proto == HID_PROTOCOL_KEYBOARD) {
-				ESP_ERROR_CHECK(hid_class_request_set_idle(hid_device_handle, 0, 0));
+			err=hid_host_device_open(hid_device_handle, &dev_config);
+			if (err!=ESP_OK) {
+				ESP_LOGE(TAG, "HID Device skipped: open failed: %s", esp_err_to_name(err));
+				free(hidev_ptr);
+				break;
 			}
-		}
 
-			ESP_ERROR_CHECK(hid_host_device_start(hid_device_handle));
+			//optional requests: some devices stall them and still work
+			if (dev_params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
+				err=hid_class_request_set_protocol(hid_device_handle, HID_REPORT_PROTOCOL_REPORT);
+				if (err!=ESP_OK) ESP_LOGW(TAG, "set_protocol failed: %s", esp_err_to_name(err));
+				if (dev_params.proto == HID_PROTOCOL_KEYBOARD) {
+					err=hid_class_request_set_idle(hid_device_handle, 0, 0);
+					if (err!=ESP_OK) ESP_LOGW(TAG, "set_idle failed: %s", esp_err_to_name(err));
+				}
+			}
+
+			err=hid_host_device_start(hid_device_handle);
+			if (err!=ESP_OK) {
+				ESP_LOGE(TAG, "HID Device skipped: start failed: %s", esp_err_to_name(err));
+				hid_host_device_close(hid_device_handle);
+				free(hidev_ptr);
+				break;
+			}
 
 			size_t rep_desc_size;
 			uint8_t *rep_desc=hid_host_get_report_descriptor(hid_device_handle, &rep_desc_size);
@@ -187,10 +227,17 @@ static void usb_lib_task(void *arg)
 {
 	const usb_host_config_t host_config = {
 		.skip_phy_setup = false,
+		.root_port_unpowered = true,
 		.intr_flags = ESP_INTR_FLAG_LEVEL1,
 	};
 
 	ESP_ERROR_CHECK(usb_host_install(&host_config));
+	//ESP32-P4-PC: the USB-A ports sit behind an onboard FE1.1s hub. ESP-IDF does not
+	//support the transaction translator needed for FS/LS devices (keyboards, mice)
+	//behind a HS hub, so force the HS controller to FS/LS-only operation. The hub then
+	//enumerates as a FS hub, behind which LS/FS devices work.
+	USB_DWC_HS.hcfg_reg.fslssupp = 1;
+	ESP_ERROR_CHECK(usb_host_lib_set_root_port_power(true));
 	xTaskNotifyGive(arg);
 
 	while (true) {
@@ -250,7 +297,7 @@ void usb_hid_task(void)
 	*/
 	task_created = xTaskCreatePinnedToCore(usb_lib_task,
 										   "usb_events",
-										   4096,
+										   3072,	//peak use ~0.8 KB
 										   xTaskGetCurrentTaskHandle(),
 										   5, NULL, 0);
 	assert(task_created == pdTRUE);
@@ -266,7 +313,7 @@ void usb_hid_task(void)
 	const hid_host_driver_config_t hid_host_driver_config = {
 		.create_background_task = true,
 		.task_priority = 5,
-		.stack_size = 4096,
+		.stack_size = 3072,	//peak use ~0.5 KB
 		.core_id = 0,
 		.callback = hid_host_device_callback,
 		.callback_arg = NULL
