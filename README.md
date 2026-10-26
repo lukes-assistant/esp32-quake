@@ -2,9 +2,9 @@ This is a version of the Quake 1 engine that runs on the
 [Olimex ESP32-P4-PC](https://www.olimex.com/Products/IoT/ESP32-P4/ESP32-P4-PC/open-source-hardware),
 with video output over HDMI. It manages 2x the pixels at 2x the framerate than the original repo.
 
-Native 640x480 without upscaling, ~53fps
-Native 800x600 without upscaling, ~38fps
-Native 1280x720 without upscaling, ~10fps
+* Native 640x480 without upscaling, ~53fps
+* Native 800x600 without upscaling, ~38fps
+* Native 1280x720 without upscaling, ~10fps
 
 It is based on a port of [espressif/esp32-quake](https://github.com/espressif/esp32-quake), which targeted
 the ESP32-P4-Function-EV-Board with a 1024x600 MIPI LCD using 2.5x upscaling. See
